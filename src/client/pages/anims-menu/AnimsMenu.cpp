@@ -35,16 +35,21 @@ float g_rotAngle = 0.0f;
 bool g_camAttached = false;
 bool g_dragRot = false;
 float g_dragLastX = 0.0f;
+game::CVector g_savedPos{};
+bool g_hasSavedPos = false;
 
 void SetupPreviewCamera() {
     if (!core::IsPlayerReady()) return;
     auto* me = game::FindPlayerPed(0);
     if (!me) return;
 
-    game::script::Cmd(0x01B4).I(0).I(0).Run(); // SET_PLAYER_CONTROL off
+    if (!g_hasSavedPos) {
+        g_savedPos = me->GetPosition();
+        g_hasSavedPos = true;
+    }
 
     float h = me->CurrentRotation() + g_rotAngle;
-    game::CVector pos = me->GetPosition();
+    game::CVector pos = g_savedPos;
     float dist = 2.6f;
     float camX = pos.x - std::sin(h) * dist;
     float camY = pos.y + std::cos(h) * dist;
@@ -65,12 +70,12 @@ void SetupPreviewCamera() {
 void RestorePreviewCamera() {
     if (!g_camAttached) return;
     g_camAttached = false;
+    g_hasSavedPos = false;
     game::script::Cmd(0x0930).I(0).Run();
     game::script::Cmd(0x092F).I(0).Run();
     game::script::Cmd(0x0925).Run();
     game::script::Cmd(0x02EB).Run(); // RESTORE_CAMERA_JUMPCUT
     game::script::Cmd(0x0373).Run(); // SET_CAMERA_BEHIND_PLAYER
-    game::script::Cmd(0x01B4).I(0).I(1).Run(); // SET_PLAYER_CONTROL on
 }
 std::string g_statusMsg;
 uint64_t g_statusUntil = 0;
@@ -210,7 +215,8 @@ void RenderAnimsMenu() {
     // List area & Side panel (Wheel slots)
     float sideW = 210 * s;
     float listW = cw - sideW - 14 * s;
-    float listH = H - (cy - y) - 48 * s;
+    float bottomH = 56 * s;
+    float listH = H - (cy - y) - bottomH;
 
     // --- DRAW ANIMATION LIST ---
     g.Rect(cx, cy, listW, listH, 0xFF090C10);
@@ -272,7 +278,8 @@ void RenderAnimsMenu() {
     spY += sh + 6 * s;
 
     const auto& slots = emotes::WheelSlots();
-    float slotRowH = std::max(24 * s, (listH - 80 * s) / 10.0f);
+    float actionBtnsH = (rowH + 4 * s) * 2;
+    float slotRowH = std::max(18 * s, (listH - (sh + 6 * s) - actionBtnsH - 12 * s) / 10.0f);
     for (int i = 0; i < emotes::kWheelSlots && i < (int)slots.size(); ++i) {
         bool hover = Hovered(spX, spY, sideW, slotRowH);
         bool isAssigning = (g_assignSlot == i);
@@ -351,19 +358,20 @@ void RenderAnimsMenu() {
     }
 
     // Bottom bar: Status & Close button
-    float by = y + H - 36 * s;
+    float by = y + H - 42 * s;
+    const char* close = TR("Закрыть (F3)", "Close (F3)");
+    float room = mh * 1.4f;
+    float closeBtnW = g.TextWidth(FONT_MENU, close) + 2 * room;
+    float closeX = cx + cw - closeBtnW;
+    bool closing = w::Button("btn_close", closeX, by, closeBtnW, rowH, close);
+
     if (NowMs() < g_statusUntil && !g_statusMsg.empty()) {
         g.Text(FONT_SMALL, cx, by + 6 * s, g_statusMsg, kSaGreen, TEXT_SHADOW);
     } else {
-        std::string hint = TR("Стрелки / мышь: выбор анимации. Клик по слоту колеса справа назначает анимацию.",
-                              "Arrows / mouse: select anim. Click slot on right to assign.");
+        std::string hint = TR("Стрелки / мышь: выбор. Клик по слоту: назначить.",
+                              "Arrows / mouse: select. Click slot: assign.");
         g.Text(FONT_SMALL, cx, by + 6 * s, hint, kSaMuted, TEXT_SHADOW);
     }
-
-    const char* close = TR("Закрыть (F3)", "Close (F3)");
-    float room = mh * 1.6f;
-    float closeX = cx + cw - g.TextWidth(FONT_MENU, close);
-    bool closing = w::Button("btn_close", closeX - room, by, g.TextWidth(FONT_MENU, close) + 2 * room, rowH, close);
 
     w::EndFrame();
     w::DrawCursor();

@@ -233,6 +233,7 @@ enum MsgId : uint8_t {
                               // n x {i32 track, i8 type, i8 index} queued, u8 track flags, i32 ms into the first, i32 its
                               // length (no tracks: the radio off or the User Track Player)
 
+    G_RADIO_STREAM = 179,     // unreliable: radio/custom audio frame
     G_VOICE = 200,            // unreliable: voice frame
     G_LAST = 255,
 };

@@ -66,7 +66,7 @@ def targets(extra=()):
         "includes": COMMON_INC + ["src/client", "third_party/minhook/include"],
         "defines": ["-DCOOP_CLIENT"], "cflags": [],
         "deps": [common, ENET, MINHOOK],
-        "libs": ["-lws2_32", "-lwinmm", "-lgdi32", "-luser32", "-lkernel32", "-lole32", "-loleaut32", "-lshell32", "-luuid",
+        "libs": ["-lws2_32", "-lwinmm", "-lgdi32", "-luser32", "-lkernel32", "-lole32", "-loleaut32", "-lshell32", "-luuid", "-lcomdlg32",
                  "-ldbghelp", "-lwinhttp"],
     }
     server = {

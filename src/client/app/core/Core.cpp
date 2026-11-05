@@ -19,6 +19,7 @@
 #include "features/teleport/Teleport.h"
 #include "features/updater/Updater.h"
 #include "pages/anims-menu/AnimsMenu.h"
+#include "pages/music-menu/MusicMenu.h"
 #include "pages/connect-menu/ConnectMenu.h"
 #include "pages/players-menu/PlayersMenu.h"
 #include "shared/api/net-session/Session.h"
@@ -134,6 +135,7 @@ void RenderOverlay() {
     ui::TheChat().Render();
     ui::RenderOverlay();  // after the chat: the contest's board on top hides the ends of its longest lines
     ui::RenderAnimsMenu();
+    ui::RenderMusicMenu();
     ui::RenderPlayersMenu();
     ui::RenderConnectMenu();
     g.End();
@@ -477,6 +479,10 @@ bool OnKeyDown(int vk, bool repeat) {
         if ((vk == VK_ESCAPE || vk == VK_F3) && !repeat) ui::SetAnimsMenuVisible(false);
         return true;
     }
+    if (ui::IsMusicMenuVisible()) {
+        if ((vk == VK_ESCAPE || vk == VK_F4) && !repeat) ui::SetMusicMenuVisible(false);
+        return true;
+    }
     if (ui::IsPlayersMenuVisible()) {
         if ((vk == VK_ESCAPE || vk == cfg.playerListKey) && !repeat) ui::SetPlayersMenuVisible(false);
         return true;  // its amount box takes the keys while it is open
@@ -489,6 +495,10 @@ bool OnKeyDown(int vk, bool repeat) {
     if (vk == 'U' && !game::MenuActive() && !typingCheat && contest::Key(vk)) return true;  // a contest's challenge
     if (vk == VK_F3 && IsPlayerReady()) {
         ui::ToggleAnimsMenu();
+        return true;
+    }
+    if (vk == VK_F4 && IsPlayerReady()) {
+        ui::ToggleMusicMenu();
         return true;
     }
     if (vk == VK_F9) {
