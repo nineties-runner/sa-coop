@@ -167,7 +167,7 @@ uint64_t g_sentMs = 0;
 void DriverUpdate() {
     CPlayerPed* me = FindPlayerPed(0);
     CVehicle* v = me ? me->VehicleIfIn() : nullptr;
-    NetVehicle* nv = v && v->Driver() == me && CarRadio() ? Vehicles::Instance().Find(v) : nullptr;
+    NetVehicle* nv = v && v->Driver() == me && CarRadio(v) ? Vehicles::Instance().Find(v) : nullptr;
     std::vector<uint8_t> riders;
     if (nv)
         for (auto& [id, rp] : Players::Instance().All())
@@ -323,8 +323,10 @@ void PassengerUpdate() {
         g_playTrackMs = 0;
     }
     const RemotePlayer* rp = RemoteDriver();
-    auto it = rp && CarRadio() ? g_drivers.find(rp->id) : g_drivers.end();
-    NetVehicle* nv = rp ? Vehicles::Instance().Find(rp->ped->VehicleIfIn()) : nullptr;
+    CPlayerPed* me = FindPlayerPed(0);
+    CVehicle* myVeh = me ? me->VehicleIfIn() : nullptr;
+    auto it = rp && CarRadio(myVeh) ? g_drivers.find(rp->id) : g_drivers.end();
+    NetVehicle* nv = myVeh ? Vehicles::Instance().Find(myVeh) : nullptr;
     if (it == g_drivers.end() || !nv || it->second.veh != nv->netId || NowMs() - it->second.recvMs > kStaleMs) {
         return;
     }
