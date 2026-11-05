@@ -6,6 +6,8 @@
 // starts the playing one at the driver's point; its own retune buttons are dead while the driver is a remote player.
 // The User Track Player plays files of the player's own computer: a passenger's plays its own tracks (the files are not
 // sent over the network), and the chat says so.
+#include "features/radio/Radio.h"
+
 #include <algorithm>
 #include <cstdlib>
 #include <map>
@@ -33,7 +35,6 @@ constexpr uintptr_t kAudioEngine = 0xB6BC90;    // AudioEngine
 // CAEVehicleAudioEntity::s_pVehicleAudioSettingsForRadio: the settings of the car this game's player rides in, set by
 // TurnOnRadioForVehicle (0x4F5B20) for the driver and the passengers alike
 constexpr uintptr_t kRadioCarSettings = 0xB6B99C;
-constexpr uintptr_t kUserTracksCount = 0xB6B970 + 0x06;  // AEUserRadioTrackManager.m_nUserTracksCount
 
 // CAERadioTrackManager
 constexpr int kMode = 0x68;                 // m_nMode (eRadioTrackMode)
@@ -222,7 +223,67 @@ void Tune(int8_t station, const RadioState* s) {
     g_pendingTrack = s->tracks[first];
 }
 
-bool g_toldUserTracks = false;  // the chat said the driver's User Track Player is not heard here
+}  // namespace
+
+// ---- radio namespace API implementations ----
+
+namespace radio {
+
+bool CarRadio() {
+    auto* settings = Ref<uint8_t*>(kRadioCarSettings);
+    return settings && settings[0x1B] == RADIO_TYPE_CIVILIAN;
+}
+
+int8_t RequestedStation() {
+    return Requested<int8_t>(kStation);
+}
+
+int8_t ActiveStation() {
+    return Active<int8_t>(kStation);
+}
+
+void TuneToUserTracks() {
+    if (!CarRadio()) return;
+    Tune(RADIO_USER_TRACKS, nullptr);
+}
+
+bool IsDriverOnUserTracks() {
+    if (!core::IsPlayerReady()) return false;
+    CPlayerPed* me = FindPlayerPed(0);
+    CVehicle* v = me ? me->VehicleIfIn() : nullptr;
+    if (!v || v->Driver() != me || !CarRadio()) return false;
+    return Requested<int8_t>(kStation) == RADIO_USER_TRACKS;
+}
+
+bool IsPassengerOnUserTracks() {
+    if (!core::IsPlayerReady()) return false;
+    RemotePlayer* rp = RemoteDriver();
+    if (!rp || !CarRadio()) return false;
+    auto it = g_drivers.find(rp->id);
+    if (it == g_drivers.end() || NowMs() - it->second.recvMs > kStaleMs) return false;
+    return it->second.station == RADIO_USER_TRACKS;
+}
+
+bool ShouldMuteNativeRadio() {
+    if (!CarRadio()) return false;
+    if (IsDriverOnUserTracks()) return true;
+    if (IsPassengerOnUserTracks()) return true;
+    int8_t req = Requested<int8_t>(kStation);
+    int8_t act = Active<int8_t>(kStation);
+    return (req == RADIO_USER_TRACKS || act == RADIO_USER_TRACKS);
+}
+
+float GameRadioVolume() {
+    if (game::MenuActive() && !Cfg().noPauseMenu) return 0.0f;
+    uint8_t raw = Ref<uint8_t>(0xBA6798);
+    return std::clamp((float)raw / 64.0f, 0.0f, 1.0f);
+}
+
+}  // namespace radio
+
+namespace {
+
+
 
 void PassengerUpdate() {
     if (g_pending && (Field<int32_t>(Radio(), kMode) == MODE_PLAYING || NowMs() - g_pendingMs > kSettleMs)) {
@@ -235,22 +296,10 @@ void PassengerUpdate() {
     auto it = rp && CarRadio() ? g_drivers.find(rp->id) : g_drivers.end();
     NetVehicle* nv = rp ? Vehicles::Instance().Find(rp->ped->VehicleIfIn()) : nullptr;
     if (it == g_drivers.end() || !nv || it->second.veh != nv->netId || NowMs() - it->second.recvMs > kStaleMs) {
-        g_toldUserTracks = false;
         return;
     }
     RadioState& s = it->second;
-    if (s.station != RADIO_USER_TRACKS) {
-        g_toldUserTracks = false;
-    } else if (!g_toldUserTracks) {
-        g_toldUserTracks = true;
-        ui::TheChat().AddSystem(Ref<uint16_t>(kUserTracksCount)
-                                    ? TR("Водитель слушает свою музыку, а у вас играет ваш User Track Player.",
-                                         "The driver listens to their own music; your User Track Player plays for you.")
-                                    : TR("Водитель слушает свою музыку. У вас своих треков нет, поэтому радио выключено.",
-                                         "The driver listens to their own music. You have no tracks of your own, so the radio is off."));
-    }
     int8_t want = s.station;
-    if (want == RADIO_USER_TRACKS && !Ref<uint16_t>(kUserTracksCount)) want = RADIO_OFF;  // no tracks of our own
     int8_t mine = Requested<int8_t>(kStation);
     if (g_pending && mine == want) return;
     if (want == RADIO_OFF || want == RADIO_USER_TRACKS || s.n == 0) {
@@ -300,6 +349,17 @@ void Handle(uint8_t from, Reader& r) {
 
 // ---- hooks ----
 
+// CAERadioTrackManager::Service -> UpdateRadioVolume (0x4EA010): mutes native radio if on USER TRACK PLAYER
+using UpdateRadioVolumeFn = void(__fastcall*)(void*, void*);
+UpdateRadioVolumeFn g_origUpdateRadioVolume = nullptr;
+void __fastcall HookUpdateRadioVolume(void* radio, void* edx) {
+    g_origUpdateRadioVolume(radio, edx);
+    if (radio::ShouldMuteNativeRadio()) {
+        int16_t channel = Field<int16_t>(radio, 0x64);
+        CallMethod<0x4D8870>((void*)0xB5F8B8, (int32_t)channel, (int32_t)0, -100.0f, (uint32_t)0);
+    }
+}
+
 // CAERadioTrackManager::Service -> CheckForStationRetune: the retune buttons (CPad::ChangeStationJustDown/UpJustDown)
 // and RetuneRadio's requests (the scripts, the menu's audio page). A passenger of a remote driver keeps its station.
 using RetuneFn = void(__fastcall*)(void*, void*);
@@ -342,6 +402,7 @@ public:
         mem::RedirectCallFn(0x4EB9F4, &HookCheckForStationRetune, &g_origRetune);
         mem::RedirectCallFn(0x4EB9FD, &HookCheckForStationRetuneDuringPause, &g_origRetunePaused);
         mem::RedirectCallFn(0x4EBB11, &HookPlayTrack, &g_origPlayTrack);
+        mem::RedirectCallFn(0x4EBE97, &HookUpdateRadioVolume, &g_origUpdateRadioVolume);
         Net().SetHandler(proto::G_RADIO, [](uint8_t from, Reader& r) { Handle(from, r); });
     }
     void OnSessionStart() override { Reset(); }
@@ -367,7 +428,6 @@ private:
         g_sent = {};
         g_pending = g_pendingSync = false;
         g_playTrackMs = 0;
-        g_toldUserTracks = false;
     }
 };
 
