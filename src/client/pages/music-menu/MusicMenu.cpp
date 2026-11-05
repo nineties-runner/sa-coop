@@ -62,6 +62,7 @@ std::vector<music::TrackInfo> g_playlist;
 int g_currentIndex = -1;
 std::atomic<bool> g_isPlaying{false};
 std::atomic<bool> g_isPaused{false};
+std::atomic<bool> g_isLoading{false};
 std::atomic<float> g_volume{0.85f};
 std::atomic<bool> g_streamToPassengers{true};
 
@@ -191,6 +192,19 @@ void CloseRecvWaveOut() {
 // Background playback / pump thread
 std::atomic<bool> g_threadRunning{true};
 std::thread g_audioThread;
+
+void AudioThreadFunc();
+
+void EnsureAudioThreadRunning() {
+    if (!g_threadRunning.load() || !g_audioThread.joinable()) {
+        if (g_audioThread.joinable()) {
+            g_threadRunning = false;
+            g_audioThread.join();
+        }
+        g_threadRunning = true;
+        g_audioThread = std::thread(AudioThreadFunc);
+    }
+}
 
 void AudioThreadFunc() {
     music::AutoScanUserTracks();
@@ -365,6 +379,7 @@ void AudioThreadFunc() {
 namespace music {
 
 void PlayTrack(int index) {
+    EnsureAudioThreadRunning();
     std::wstring path;
     std::string title;
     uint32_t gen;
@@ -375,6 +390,7 @@ void PlayTrack(int index) {
         path = g_playlist[index].path;
         title = g_playlist[index].title;
         g_isPlaying = false;
+        g_isLoading = true;
         gen = ++g_loadGen;
     }
     if (radio::CarRadio()) {
@@ -386,14 +402,18 @@ void PlayTrack(int index) {
     std::thread([path, title, gen]() {
         DecodedTrack decoded;
         bool ok = LoadMp3File(path, decoded);
-        std::lock_guard<std::mutex> lock(g_playerMx);
-        if (gen != g_loadGen.load()) return;  // another track was chosen meanwhile
-        if (ok) {
-            g_loadedTrack = std::move(decoded);
-            g_playbackSamplePos = 0;
-            g_driverFade = 0.0f;
-            g_isPlaying = true;
-            g_isPaused = false;
+        {
+            std::lock_guard<std::mutex> lock(g_playerMx);
+            if (gen == g_loadGen.load()) {
+                g_isLoading = false;
+                if (ok) {
+                    g_loadedTrack = std::move(decoded);
+                    g_playbackSamplePos = 0;
+                    g_driverFade = 0.0f;
+                    g_isPlaying = true;
+                    g_isPaused = false;
+                }
+            }
         }
         std::lock_guard<std::mutex> ml(g_msgMx);
         g_msgs.push_back({ok, title});
@@ -410,6 +430,7 @@ void Stop() {
     std::lock_guard<std::mutex> lock(g_playerMx);
     g_isPlaying = false;
     g_isPaused = false;
+    g_isLoading = false;
     g_playbackSamplePos = 0;
     g_driverFade = 0.0f;
     CloseLocalWaveOut();
@@ -492,6 +513,18 @@ void AutoScanUserTracks() {
     if (SHGetFolderPathW(nullptr, CSIDL_MYDOCUMENTS, nullptr, SHGFP_TYPE_CURRENT, myDocs) == S_OK) {
         std::wstring ut = std::wstring(myDocs) + L"\\GTA San Andreas User Files\\User Tracks";
         AddDirectory(ut);
+    }
+    wchar_t userProfile[MAX_PATH] = {};
+    if (SHGetFolderPathW(nullptr, CSIDL_PROFILE, nullptr, SHGFP_TYPE_CURRENT, userProfile) == S_OK) {
+        if (Playlist().empty()) {
+            AddDirectory(std::wstring(userProfile) + L"\\Documents\\GTA San Andreas User Files\\User Tracks");
+        }
+        if (Playlist().empty()) {
+            AddDirectory(std::wstring(userProfile) + L"\\Downloads");
+        }
+        if (Playlist().empty()) {
+            AddDirectory(std::wstring(userProfile) + L"\\Music");
+        }
     }
     if (Playlist().empty() && myDocs[0]) {
         std::wstring dl = std::wstring(myDocs);
@@ -710,8 +743,7 @@ public:
 
     void OnInstallHooks() override {
         // Start background audio thread
-        g_threadRunning = true;
-        g_audioThread = std::thread(AudioThreadFunc);
+        EnsureAudioThreadRunning();
 
         Net().SetHandler(proto::G_RADIO_STREAM, [](uint8_t from, Reader& r) {
             uint16_t seq = r.U16(); (void)seq;
@@ -766,6 +798,7 @@ public:
             g_passengerActive.store(false);
             return;
         }
+        EnsureAudioThreadRunning();
 
         bool driverActive = radio::IsDriverOnUserTracks();
         CPlayerPed* me = FindPlayerPed(0);
@@ -830,13 +863,13 @@ public:
                 if (!music::Playlist().empty()) {
                     if (g_isPlaying.load() && g_isPaused.load()) {
                         music::TogglePause();
-                    } else if (!g_isPlaying.load()) {
+                    } else if (!g_isPlaying.load() && !g_isLoading.load()) {
                         int idx = music::CurrentTrackIndex();
                         music::PlayTrack(idx >= 0 ? idx : 0);
                     }
                     g_driverFade = 0.0f;
                 }
-            } else if (!g_isPlaying.load() && !g_isPaused.load()) {
+            } else if (!g_isPlaying.load() && !g_isPaused.load() && !g_isLoading.load()) {
                 music::AutoScanUserTracks();
                 if (!music::Playlist().empty()) {
                     int idx = music::CurrentTrackIndex();
@@ -906,7 +939,18 @@ public:
         }
     }
 
+    void OnGameStarted() override {
+        EnsureAudioThreadRunning();
+        music::AutoScanUserTracks();
+    }
+
+    void OnGameShutdown() override {
+        music::Stop();
+        CloseRecvWaveOut();
+    }
+
     void OnSessionStart() override {
+        EnsureAudioThreadRunning();
         g_wasDriverActive = false;
         g_wasPassengerActive = false;
         {
@@ -964,7 +1008,7 @@ public:
         }
     }
 
-    void OnGameShutdown() override {
+    ~MusicRadioModule() {
         g_threadRunning = false;
         if (g_audioThread.joinable()) g_audioThread.join();
         CloseLocalWaveOut();
