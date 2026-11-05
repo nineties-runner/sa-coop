@@ -10,6 +10,7 @@
 #include "features/anims/Emotes.h"
 #include "shared/config/Config.h"
 #include "shared/game/Game.h"
+#include "shared/game/Script.h"
 #include "shared/lib/core/Core.h"
 #include "shared/ui/chat/Chat.h"
 #include "shared/ui/input/Input.h"
@@ -30,6 +31,47 @@ int g_scroll = 0;
 int g_selected = -1;       // index into g_filtered
 int g_assignSlot = -1;     // 0..9 if assigning to slot, or -1
 bool g_looped = true;
+float g_rotAngle = 0.0f;
+bool g_camAttached = false;
+bool g_dragRot = false;
+float g_dragLastX = 0.0f;
+
+void SetupPreviewCamera() {
+    if (!core::IsPlayerReady()) return;
+    auto* me = game::FindPlayerPed(0);
+    if (!me) return;
+
+    game::script::Cmd(0x01B4).I(0).I(0).Run(); // SET_PLAYER_CONTROL off
+
+    float h = me->CurrentRotation() + g_rotAngle;
+    game::CVector pos = me->GetPosition();
+    float dist = 2.6f;
+    float camX = pos.x - std::sin(h) * dist;
+    float camY = pos.y + std::cos(h) * dist;
+    float camZ = pos.z + 0.35f;
+
+    float lookX = pos.x;
+    float lookY = pos.y;
+    float lookZ = pos.z + 0.1f;
+
+    game::script::Cmd(0x015F).F(camX).F(camY).F(camZ).F(0.0f).F(0.0f).F(0.0f).Run(); // SET_FIXED_CAMERA_POSITION
+    game::script::Cmd(0x0160).F(lookX).F(lookY).F(lookZ).I(2).Run(); // POINT_CAMERA_AT_POINT
+    game::script::Cmd(0x0925).Run(); // CAMERA_RESET_NEW_SCRIPTABLES
+    game::script::Cmd(0x0930).I(1).Run(); // CAMERA_PERSIST_POS
+    game::script::Cmd(0x092F).I(1).Run(); // CAMERA_PERSIST_TRACK
+    g_camAttached = true;
+}
+
+void RestorePreviewCamera() {
+    if (!g_camAttached) return;
+    g_camAttached = false;
+    game::script::Cmd(0x0930).I(0).Run();
+    game::script::Cmd(0x092F).I(0).Run();
+    game::script::Cmd(0x0925).Run();
+    game::script::Cmd(0x02EB).Run(); // RESTORE_CAMERA_JUMPCUT
+    game::script::Cmd(0x0373).Run(); // SET_CAMERA_BEHIND_PLAYER
+    game::script::Cmd(0x01B4).I(0).I(1).Run(); // SET_PLAYER_CONTROL on
+}
 std::string g_statusMsg;
 uint64_t g_statusUntil = 0;
 
@@ -78,7 +120,12 @@ void SetAnimsMenuVisible(bool visible) {
     g_assignSlot = -1;
     if (visible) {
         if (TheChat().IsOpen()) TheChat().Close();
+        g_rotAngle = 0.0f;
+        g_dragRot = false;
         UpdateFilter();
+        SetupPreviewCamera();
+    } else {
+        RestorePreviewCamera();
     }
     if (!visible && core::ConnectMenuVisible()) return;
     In().SetKeyboardCapture(visible);
@@ -109,15 +156,41 @@ void RenderAnimsMenu() {
     float s = g.Scale();
     float lh = g.LineHeight(FONT_NORMAL), sh = g.LineHeight(FONT_SMALL), mh = g.LineHeight(FONT_MENU);
 
-    float W = std::min(860 * s, g.Width() - 32 * s);
-    float H = std::min(600 * s, g.Height() - 32 * s);
-    float x = (g.Width() - W) * 0.5f, y = (g.Height() - H) * 0.5f;
-    float pad = 20 * s;
-    float cx = x + pad, cy = y + 20 * s, cw = W - 2 * pad;
+    SetupPreviewCamera();
+
+    float W = std::min(680 * s, g.Width() * 0.58f);
+    float H = std::min(640 * s, g.Height() - 40 * s);
+    float x = 24 * s, y = (g.Height() - H) * 0.5f;
+    float pad = 18 * s;
+    float cx = x + pad, cy = y + 16 * s, cw = W - 2 * pad;
+
+    // 3D Viewport on the right
+    float viewX = x + W + 16 * s;
+    float viewY = y;
+    float viewW = g.Width() - viewX - 24 * s;
+    float viewH = H;
+
+    auto& inSt = In().State();
+    if (Hovered(viewX, viewY, viewW, viewH)) {
+        if (inSt.lmbPressed) {
+            g_dragRot = true;
+            g_dragLastX = inSt.mouseX;
+        }
+    }
+    if (!inSt.lmb) g_dragRot = false;
+    if (g_dragRot) {
+        float dx = inSt.mouseX - g_dragLastX;
+        g_dragLastX = inSt.mouseX;
+        g_rotAngle += (float)dx * 0.015f;
+    }
 
     w::BeginFrame();
     g.Rect(x, y, W, H, 0xF0000000);
     g.RectOutline(x, y, W, H, kSaLine, std::max(1.0f, s));
+
+    g.Rect(viewX, viewY, viewW, viewH, 0x20000000);
+    g.RectOutline(viewX, viewY, viewW, viewH, 0xFF4A5A6B, std::max(1.0f, s));
+    g.Text(FONT_MENU_SMALL, viewX + 12 * s, viewY + 10 * s, TR("3D Превью (тяни мышью для поворота)", "3D Live Preview (drag mouse to rotate)"), kSaBlue, TEXT_SHADOW);
 
     // Title
     g.Text(FONT_MENU, cx, cy, TR("Анимации и Колесо Эмоций", "Animations & Emote Wheel"), kSaBlue, TEXT_SHADOW);
@@ -135,8 +208,8 @@ void RenderAnimsMenu() {
     cy += rowH + 12 * s;
 
     // List area & Side panel (Wheel slots)
-    float sideW = 260 * s;
-    float listW = cw - sideW - 16 * s;
+    float sideW = 210 * s;
+    float listW = cw - sideW - 14 * s;
     float listH = H - (cy - y) - 48 * s;
 
     // --- DRAW ANIMATION LIST ---
