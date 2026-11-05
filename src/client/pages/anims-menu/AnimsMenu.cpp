@@ -133,7 +133,7 @@ void SetupPreviewCamera() {
 
         float h = me->CurrentRotation();
 
-        game::CVector p = me->GetPosition();
+        game::CVector p = (me->InVehicle() && me->Vehicle()) ? me->Vehicle()->GetPosition() : me->GetPosition();
 
         float fwdDist = 3.5f;
 
@@ -145,7 +145,7 @@ void SetupPreviewCamera() {
 
         if (!game::IsModelLoaded(model)) game::LoadModelNow(model);
 
-        game::script::Cmd(0x009A).I(24).I(model).F(g_previewPos.x).F(g_previewPos.y).F(g_previewPos.z).Out(&g_previewPedHandle).Run();  // CREATE_CHAR
+        game::script::Cmd(0x009A).I(24).I(model).F(g_previewPos.x).F(g_previewPos.y).F(g_previewPos.z - 1.0f).Out(&g_previewPedHandle).Run();  // CREATE_CHAR
 
         if (g_previewPedHandle >= 0) {
 
@@ -183,16 +183,16 @@ void SetupPreviewCamera() {
 
         float lookZ = g_previewPos.z + 0.1f;
 
-        game::script::Cmd(0x015F).F(camX).F(camY).F(camZ).F(0.0f).F(0.0f).F(0.0f).Run(); // SET_FIXED_CAMERA_POSITION
-
-        game::script::Cmd(0x0160).F(lookX).F(lookY).F(lookZ).I(2).Run(); // POINT_CAMERA_AT_POINT
-
-        game::script::Cmd(0x0925).Run(); // CAMERA_RESET_NEW_SCRIPTABLES
-
-        game::script::Cmd(0x0930).I(1).Run(); // CAMERA_PERSIST_POS
-
-        game::script::Cmd(0x092F).I(1).Run(); // CAMERA_PERSIST_TRACK
-
+        game::CVector src{camX, camY, camZ}, look{lookX, lookY, lookZ};
+        if (!g_camAttached) {  // opcodes once (as Pool): repeating CAMERA_RESET_NEW_SCRIPTABLES each frame blanked the camera to 0,0,0
+            game::script::Cmd(0x015F).F(camX).F(camY).F(camZ).F(0.0f).F(0.0f).F(0.0f).Run();  // SET_FIXED_CAMERA_POSITION
+            game::script::Cmd(0x0160).F(lookX).F(lookY).F(lookZ).I(2).Run();                  // POINT_CAMERA_AT_POINT
+            game::script::Cmd(0x0925).Run();                                                   // CAMERA_RESET_NEW_SCRIPTABLES
+            game::script::Cmd(0x0930).I(1).Run();                                              // CAMERA_PERSIST_POS
+            game::script::Cmd(0x092F).I(1).Run();                                              // CAMERA_PERSIST_TRACK
+        }
+        game::Ref<game::CVector>(game::addr::TheCamera + 0xCE0) = src;   // m_vecMoveLinear
+        game::Ref<game::CVector>(game::addr::TheCamera + 0xC80) = look;  // m_vecTrackLinear
         g_camAttached = true;
 
     }
