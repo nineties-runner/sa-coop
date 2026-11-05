@@ -27,6 +27,7 @@ float DurationSeconds();
 // Playlist management
 void AddFile(const std::wstring& path);
 void AddDirectory(const std::wstring& dir);
+void AutoScanUserTracks();
 void ClearPlaylist();
 const std::vector<TrackInfo>& Playlist();
 

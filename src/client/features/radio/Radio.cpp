@@ -71,11 +71,53 @@ uint8_t* Radio() { return (uint8_t*)kRadio; }
 template <typename T> T& Requested(int off) { return Field<T>(Radio(), kRequested + off); }
 template <typename T> T& Active(int off) { return Field<T>(Radio(), kActive + off); }
 
-// a civilian radio plays in the car this game's player rides in (an emergency one plays the police scanner)
-bool CarRadio() {
-    auto* settings = Ref<uint8_t*>(kRadioCarSettings);
-    return settings && settings[0x1B] == RADIO_TYPE_CIVILIAN;  // tVehicleAudioSettings::RadioType
+}  // namespace
+
+namespace radio {
+
+bool CarRadio(game::CVehicle* v) {
+    if (!v) return false;
+    int sub = v->VehicleSubClass();
+    if (sub == game::VEHICLE_TYPE_BIKE || sub == game::VEHICLE_TYPE_BMX ||
+        sub == game::VEHICLE_TYPE_BOAT || sub == game::VEHICLE_TYPE_TRAILER) {
+        return false;
+    }
+    uint8_t radioType = Field<uint8_t>(v, 0x1D3);
+    return radioType == RADIO_TYPE_CIVILIAN;
 }
+
+bool CarRadio() {
+    game::CPlayerPed* me = game::FindPlayerPed(0);
+    if (me && me->VehicleIfIn()) return CarRadio(me->VehicleIfIn());
+    auto* settings = Ref<uint8_t*>(kRadioCarSettings);
+    return settings && settings[0x1B] == RADIO_TYPE_CIVILIAN;
+}
+
+const RemotePlayer* RemoteDriver() {
+    if (!Net().Online()) return nullptr;
+    game::CPlayerPed* me = game::FindPlayerPed(0);
+    game::CVehicle* v = me ? me->VehicleIfIn() : nullptr;
+    if (!v) return nullptr;
+    game::CPed* driver = v->Driver();
+    if (driver && driver != me) {
+        if (RemotePlayer* rp = Players::Instance().FindByPed(driver)) return rp;
+    }
+    NetVehicle* nv = Vehicles::Instance().Find(v);
+    if (nv) {
+        for (auto& [id, player] : Players::Instance().All()) {
+            if (player.vehNetId == nv->netId && player.seat < 0 && player.ped != me) {
+                return &player;
+            }
+        }
+    }
+    return nullptr;
+}
+
+}  // namespace radio
+
+namespace {
+using radio::CarRadio;
+using radio::RemoteDriver;
 
 void FrontendSound(int event) {
     CallMethod<0x506EA0>((void*)kAudioEngine, event, 0.0f, 1.0f);  // CAudioEngine::ReportFrontendAudioEvent
@@ -163,14 +205,7 @@ void DriverUpdate() {
 
 std::map<uint8_t, RadioState> g_drivers;  // the latest radio of each player who drives with players in the car
 
-// the remote player driving the car this game's player rides in as a passenger
-RemotePlayer* RemoteDriver() {
-    if (!Net().Online()) return nullptr;
-    CPlayerPed* me = FindPlayerPed(0);
-    CVehicle* v = me ? me->VehicleIfIn() : nullptr;
-    CPed* driver = v ? v->Driver() : nullptr;
-    return driver && driver != me ? Players::Instance().FindByPed(driver) : nullptr;
-}
+// RemoteDriver() now implemented in radio:: namespace above
 
 // a retune of ours that has not started playing yet
 bool g_pending = false;
@@ -229,11 +264,6 @@ void Tune(int8_t station, const RadioState* s) {
 
 namespace radio {
 
-bool CarRadio() {
-    auto* settings = Ref<uint8_t*>(kRadioCarSettings);
-    return settings && settings[0x1B] == RADIO_TYPE_CIVILIAN;
-}
-
 int8_t RequestedStation() {
     return Requested<int8_t>(kStation);
 }
@@ -257,7 +287,7 @@ bool IsDriverOnUserTracks() {
 
 bool IsPassengerOnUserTracks() {
     if (!core::IsPlayerReady()) return false;
-    RemotePlayer* rp = RemoteDriver();
+    const RemotePlayer* rp = RemoteDriver();
     if (!rp || !CarRadio()) return false;
     auto it = g_drivers.find(rp->id);
     if (it == g_drivers.end() || NowMs() - it->second.recvMs > kStaleMs) return false;
@@ -292,7 +322,7 @@ void PassengerUpdate() {
         g_pending = g_pendingSync = false;
         g_playTrackMs = 0;
     }
-    RemotePlayer* rp = RemoteDriver();
+    const RemotePlayer* rp = RemoteDriver();
     auto it = rp && CarRadio() ? g_drivers.find(rp->id) : g_drivers.end();
     NetVehicle* nv = rp ? Vehicles::Instance().Find(rp->ped->VehicleIfIn()) : nullptr;
     if (it == g_drivers.end() || !nv || it->second.veh != nv->netId || NowMs() - it->second.recvMs > kStaleMs) {

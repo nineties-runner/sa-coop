@@ -1,6 +1,7 @@
 #include "pages/music-menu/MusicMenu.h"
 
 #include <windows.h>
+#include <shlobj.h>
 #include <commdlg.h>
 #include <mmsystem.h>
 
@@ -75,6 +76,14 @@ float g_recvFade = 0.0f;
 DecodedTrack g_loadedTrack;
 size_t g_playbackSamplePos = 0;
 uint16_t g_streamSeq = 0;
+
+// Diagnostics & metrics
+std::atomic<uint32_t> g_txPackets{0};
+std::atomic<uint32_t> g_rxPackets{0};
+std::atomic<uint32_t> g_rxQueueSize{0};
+std::atomic<int> g_riderCount{0};
+std::mutex g_rxTitleMx;
+std::string g_rxTrackTitle;
 
 // WinMM waveOut device for local music playback
 HWAVEOUT g_waveOut = nullptr;
@@ -256,11 +265,18 @@ void AudioThreadFunc() {
 
                         Writer w(proto::G_RADIO_STREAM);
                         w.U16(g_streamSeq++);
+                        bool sendTitle = (g_streamSeq % 50 == 1);
+                        w.U8(sendTitle ? 1 : 0);
+                        if (sendTitle) {
+                            std::string curTitle = music::CurrentTrackTitle();
+                            w.Str(curTitle.empty() ? "User Track" : curTitle);
+                        }
                         w.U16((uint16_t)encL.size());
                         w.Bytes(encL.data(), encL.size());
                         w.U16((uint16_t)encR.size());
                         w.Bytes(encR.data(), encR.size());
                         Net().Send(proto::CH_VOICE, w);
+                        g_txPackets++;
                     }
                 }
 
@@ -447,6 +463,22 @@ void AddDirectory(const std::wstring& dir) {
     }
 }
 
+void AutoScanUserTracks() {
+    wchar_t myDocs[MAX_PATH] = {};
+    if (SHGetFolderPathW(nullptr, CSIDL_MYDOCUMENTS, nullptr, SHGFP_TYPE_CURRENT, myDocs) == S_OK) {
+        std::wstring ut = std::wstring(myDocs) + L"\\GTA San Andreas User Files\\User Tracks";
+        AddDirectory(ut);
+    }
+    if (Playlist().empty() && myDocs[0]) {
+        std::wstring dl = std::wstring(myDocs);
+        size_t pos = dl.find_last_of(L"\\/");
+        if (pos != std::wstring::npos) {
+            std::wstring dlDir = dl.substr(0, pos + 1) + L"Downloads";
+            AddDirectory(dlDir);
+        }
+    }
+}
+
 void ClearPlaylist() {
     Stop();
     std::lock_guard<std::mutex> lock(g_playerMx);
@@ -574,6 +606,8 @@ void RenderMusicMenu() {
     if (w::Checkbox("chk_stream", cx, cy, TR("Стримить радио пассажирам в машине", "Stream radio to car passengers"), stream)) {
         music::SetStreamingEnabled(stream);
     }
+    std::string diag = Format("TX: %u | RX: %u", (unsigned)g_txPackets.load(), (unsigned)g_rxPackets.load());
+    g.Text(FONT_SMALL, cx + cw, cy + 2 * s, diag, kSaMuted, TEXT_RIGHT | TEXT_SHADOW);
     cy += lh + 12 * s;
 
     // Playlist header
@@ -654,6 +688,14 @@ public:
 
         Net().SetHandler(proto::G_RADIO_STREAM, [](uint8_t from, Reader& r) {
             uint16_t seq = r.U16(); (void)seq;
+            uint8_t flags = r.U8();
+            if (flags & 1) {
+                std::string title = r.Str(128);
+                if (!title.empty()) {
+                    std::lock_guard<std::mutex> lock(g_rxTitleMx);
+                    g_rxTrackTitle = title;
+                }
+            }
             uint16_t lenL = r.U16();
             std::vector<uint8_t> dataL = r.Bytes(lenL);
             uint16_t lenR = r.U16();
@@ -664,22 +706,10 @@ public:
             // Only accept if we are in the same vehicle as the sender who is driving
             CPlayerPed* me = FindPlayerPed(0);
             CVehicle* v = me ? me->VehicleIfIn() : nullptr;
-            if (!v || v->Driver() == me || !radio::CarRadio()) return;
+            if (!v || v->Driver() == me || !radio::CarRadio(v)) return;
 
-            CPed* d = v->Driver();
-            const RemotePlayer* rp = d ? Players::Instance().FindByPed(d) : nullptr;
-            if (!rp) {
-                NetVehicle* nv = Vehicles::Instance().Find(v);
-                if (nv) {
-                    for (auto& [id, player] : Players::Instance().All()) {
-                        if (player.vehNetId == nv->netId && player.seat < 0) {
-                            rp = &player;
-                            break;
-                        }
-                    }
-                }
-            }
-            if (!rp || rp->id != from) return; // not passenger of this sender
+            const RemotePlayer* rp = radio::RemoteDriver();
+            if (!rp || rp->id != from) return; // not passenger of this driver
 
             // Ensure passenger radio is tuned to USER TRACK PLAYER
             if (radio::RequestedStation() != radio::RADIO_USER_TRACKS) {
@@ -700,6 +730,8 @@ public:
             if (g_recvQueue.size() >= kMaxBuffer) g_recvQueue.pop_front();
             g_recvQueue.push_back(f);
             g_lastRecvMs = NowMs();
+            g_rxPackets++;
+            g_rxQueueSize.store((uint32_t)g_recvQueue.size());
         });
     }
 
@@ -714,35 +746,55 @@ public:
         bool driverActive = radio::IsDriverOnUserTracks();
         CPlayerPed* me = FindPlayerPed(0);
         CVehicle* v = me ? me->VehicleIfIn() : nullptr;
-        bool isPassenger = v && v->Driver() && v->Driver() != me && radio::CarRadio();
-        bool passengerActive = isPassenger && (NowMs() - g_lastRecvMs < 2000);
+        const RemotePlayer* driver = radio::RemoteDriver();
+        bool isPassenger = v && driver != nullptr && radio::CarRadio(v);
+        bool passengerActive = isPassenger && (NowMs() - g_lastRecvMs < 3000);
         float gameVol = radio::GameRadioVolume();
 
         g_driverActive.store(driverActive);
         g_passengerActive.store(passengerActive);
         g_gameRadioVol.store(gameVol);
 
+        // Notify passenger on connect/disconnect
+        static bool s_wasPassengerActive = false;
+        if (passengerActive && !s_wasPassengerActive) {
+            std::string trackName;
+            {
+                std::lock_guard<std::mutex> lock(g_rxTitleMx);
+                trackName = g_rxTrackTitle;
+            }
+            if (trackName.empty()) trackName = TR("Поток водителя", "Driver's stream");
+            ui::TheChat().AddSystem(Format(TR("Радиопоток водителя подключён: %s", "Connected to driver's radio stream: %s"), trackName.c_str()));
+        } else if (!passengerActive && s_wasPassengerActive && isPassenger) {
+            ui::TheChat().AddSystem(TR("Радиопоток водителя отключён.", "Driver's radio stream disconnected."));
+        }
+        s_wasPassengerActive = passengerActive;
+
         // Check if car has riders
-        bool hasRiders = false;
+        int riderCount = 0;
         if (driverActive && Net().Online()) {
-            CPlayerPed* me = FindPlayerPed(0);
-            CVehicle* v = me ? me->VehicleIfIn() : nullptr;
             if (v) {
                 for (auto& [id, rp] : Players::Instance().All()) {
                     if (rp.ped && rp.ped->VehicleIfIn() == v) {
-                        hasRiders = true;
-                        break;
+                        riderCount++;
                     }
                 }
             }
         }
-        g_hasPassengers.store(hasRiders);
+        g_hasPassengers.store(riderCount > 0);
+        g_riderCount.store(riderCount);
 
-        // Auto-resume driver's track when tuning into USER TRACK PLAYER
+        // Auto-scan and auto-resume driver's track when tuning into USER TRACK PLAYER
         static bool s_wasDriverActive = false;
         if (driverActive && !s_wasDriverActive) {
+            if (music::Playlist().empty()) {
+                music::AutoScanUserTracks();
+            }
             std::lock_guard<std::mutex> lock(g_playerMx);
-            if (g_currentIndex >= 0 && !g_loadedTrack.pcm.empty() && !g_isPlaying.load()) {
+            if (g_currentIndex < 0 && !g_playlist.empty()) {
+                lock.~lock_guard();
+                music::PlayTrack(0);
+            } else if (g_currentIndex >= 0 && !g_loadedTrack.pcm.empty() && !g_isPlaying.load()) {
                 g_isPlaying = true;
                 g_isPaused = false;
                 g_driverFade = 0.0f;
@@ -757,6 +809,50 @@ public:
                 g_recvQueue.clear();
                 g_recvPlaying = false;
                 CloseRecvWaveOut();
+            }
+        }
+    }
+
+    void OnRender() override {
+        if (!core::IsPlayerReady()) return;
+        CPlayerPed* me = FindPlayerPed(0);
+        CVehicle* v = me ? me->VehicleIfIn() : nullptr;
+        if (!v || !radio::CarRadio(v)) return;
+
+        auto& g = ui::Gfx();
+        float s = g.Scale();
+        float x = 24 * s;
+        float y = g.Height() * 0.56f;
+
+        if (radio::IsDriverOnUserTracks()) {
+            std::string title = music::CurrentTrackTitle();
+            if (title.empty()) title = TR("Трек не выбран", "No track selected");
+            int riders = g_riderCount.load();
+            uint32_t tx = g_txPackets.load();
+            std::string text = Format(TR("Радио: %s (стрим: %d пасс, %u пкт)",
+                                         "Radio: %s (stream: %d riders, %u pkts)"),
+                                      title.c_str(), riders, tx);
+            g.Text(ui::FONT_SMALL, x, y, text, 0xFFE6D050, ui::TEXT_OUTLINE);
+        } else if (radio::RemoteDriver() != nullptr) {
+            bool pActive = g_passengerActive.load();
+            if (pActive) {
+                std::string title;
+                {
+                    std::lock_guard<std::mutex> lock(g_rxTitleMx);
+                    title = g_rxTrackTitle;
+                }
+                if (title.empty()) title = TR("Поток водителя", "Driver's stream");
+                uint32_t rx = g_rxPackets.load();
+                uint32_t q = g_rxQueueSize.load();
+                int volPct = (int)(g_gameRadioVol.load() * g_volume.load() * 100.0f);
+                std::string text = Format(TR("Радио водителя: %s (приём: %u пкт, буфер: %u, звук: %d%%)",
+                                             "Driver's radio: %s (rx: %u pkts, buf: %u, vol: %d%%)"),
+                                          title.c_str(), rx, q, volPct);
+                g.Text(ui::FONT_SMALL, x, y, text, 0xFF70E090, ui::TEXT_OUTLINE);
+            } else if (radio::RequestedStation() == radio::RADIO_USER_TRACKS || radio::ActiveStation() == radio::RADIO_USER_TRACKS) {
+                std::string text = TR("Радио водителя: ожидание аудиопотока...",
+                                      "Driver's radio: waiting for audio stream...");
+                g.Text(ui::FONT_SMALL, x, y, text, 0xFFAAAAAA, ui::TEXT_OUTLINE);
             }
         }
     }

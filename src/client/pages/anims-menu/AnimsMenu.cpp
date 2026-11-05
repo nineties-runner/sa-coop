@@ -74,7 +74,6 @@ std::string g_previewAnim;
 
 bool g_previewLooped = true;
 
-uint64_t g_previewSince = 0;
 bool g_previewStarted = false;  // the animation was given to the ped: re-giving it every frame froze it on frame 0
 
 void DestroyPreviewPed() {
@@ -99,7 +98,7 @@ void UpdatePreviewPedAnim() {
     if (blockIdx < 0) return;
     if (!game::anim::BlockLoaded(blockIdx)) {
         game::RequestModel(game::anim::kIfpBase + blockIdx, 2);
-        if (NowMs() - g_previewSince < 5000) return;
+        return;
     }
     if (g_previewStarted) return;
     g_previewStarted = true;
@@ -116,7 +115,6 @@ void PlayPreviewAnim(const char* block, const char* anim, bool loop) {
 
     g_previewLooped = loop;
 
-    g_previewSince = NowMs();
     g_previewStarted = false;
 
     UpdatePreviewPedAnim();
@@ -130,6 +128,11 @@ void SetupPreviewCamera() {
     auto* me = game::FindPlayerPed(0);
 
     if (!me) return;
+
+    if (me->InVehicle() && me->Vehicle()) {
+        me->Vehicle()->MoveSpeed() = {0.0f, 0.0f, 0.0f};
+        me->Vehicle()->TurnSpeed() = {0.0f, 0.0f, 0.0f};
+    }
 
     if (g_previewPedHandle < 0) {
 
@@ -159,7 +162,7 @@ void SetupPreviewCamera() {
 
             game::script::Cmd(0x0619).I(g_previewPedHandle).I(0).Run();  // SET_CHAR_COLLISION off
 
-            game::script::Cmd(0x04D7).I(g_previewPedHandle).I(1).Run();  // FREEZE_CHAR_POSITION
+            game::script::Cmd(0x04B8).I(g_previewPedHandle).I(1).Run();  // SET_CHAR_STAY_IN_SAME_PLACE
 
             game::script::Cmd(0x0173).I(g_previewPedHandle).F(g_previewHeading * 57.29578f).Run();  // SET_CHAR_HEADING
 
@@ -173,22 +176,22 @@ void SetupPreviewCamera() {
 
         game::script::Cmd(0x0173).I(g_previewPedHandle).F(rotH * 57.29578f).Run();
 
-        float dist = 4.2f;
+        float dist = 3.6f;
 
         float camX = g_previewPos.x - std::sin(g_previewHeading) * dist;
 
         float camY = g_previewPos.y + std::cos(g_previewHeading) * dist;
 
-        float camZ = g_previewPos.z + 0.2f;
+        float camZ = g_previewPos.z + 0.05f;
 
         float lookX = g_previewPos.x;
 
         float lookY = g_previewPos.y;
 
-        float lookZ = g_previewPos.z;
+        float lookZ = g_previewPos.z - 0.15f;
 
         // slide the view left so the ped sits in the right-hand preview window, not behind the list
-        float sx = std::cos(g_previewHeading) * 1.6f, sy = std::sin(g_previewHeading) * 1.6f;
+        float sx = std::cos(g_previewHeading) * 1.35f, sy = std::sin(g_previewHeading) * 1.35f;
         camX += sx, lookX += sx, camY += sy, lookY += sy;
         game::CVector src{camX, camY, camZ}, look{lookX, lookY, lookZ};
         if (!g_camAttached) {  // opcodes once (as Pool): repeating CAMERA_RESET_NEW_SCRIPTABLES each frame blanked the camera to 0,0,0
