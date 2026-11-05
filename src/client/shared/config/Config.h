@@ -60,6 +60,7 @@ struct ClientConfig {
 
     // [debug]
     bool debugOverlay = false;
+    bool radioDebug = false;          // show radio stream HUD (riders, pkts, rx/tx stats)
     bool cleanScreen = false;         // the mod draws nothing over the game (chat, names, menus): video recording
     bool verboseLog = false;
     bool forceRelay = false;          // invite codes: skip the direct attempt (relay tests)

@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "common/api/protocol/Protocol.h"
+#include "common/lib/ini/Ini.h"
 #include "common/lib/log/Log.h"
 #include "common/lib/mp3/minimp3_ex.h"
 #include "common/lib/util/Util.h"
@@ -548,6 +549,16 @@ const std::vector<TrackInfo>& Playlist() { return g_playlist; }
 bool IsStreamingEnabled() { return g_streamToPassengers.load(); }
 void SetStreamingEnabled(bool on) { g_streamToPassengers = on; }
 
+bool IsDebugHudEnabled() { return Cfg().radioDebug; }
+void SetDebugHudEnabled(bool on) {
+    Cfg().radioDebug = on;
+    Ini ini;
+    if (ini.Load(Cfg().iniPath)) {
+        ini.SetInt("debug", "radio", on ? 1 : 0);
+        ini.Save(Cfg().iniPath);
+    }
+}
+
 }  // namespace music
 
 // UI Implementation
@@ -668,7 +679,14 @@ void RenderMusicMenu() {
     }
     std::string diag = Format("TX: %u | RX: %u", (unsigned)g_txPackets.load(), (unsigned)g_rxPackets.load());
     g.Text(FONT_SMALL, cx + cw, cy + 2 * s, diag, kSaMuted, TEXT_RIGHT | TEXT_SHADOW);
-    cy += lh + 12 * s;
+    cy += lh + 8 * s;
+
+    // Debug mode checkbox
+    bool debugHud = music::IsDebugHudEnabled();
+    if (w::Checkbox("chk_debug_hud", cx, cy, TR("Режим отладки (инфо радио на экране)", "Debug mode (radio overlay on screen)"), debugHud)) {
+        music::SetDebugHudEnabled(debugHud);
+    }
+    cy += lh + 10 * s;
 
     // Playlist header
     g.Text(FONT_MENU_SMALL, cx, cy, TR("Список треков", "Playlist"), kSaBlue, TEXT_SHADOW);
@@ -896,6 +914,7 @@ public:
     }
 
     void OnRender() override {
+        if (!music::IsDebugHudEnabled()) return;
         if (!core::IsPlayerReady()) return;
         CPlayerPed* me = FindPlayerPed(0);
         CVehicle* v = me ? me->VehicleIfIn() : nullptr;

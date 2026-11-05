@@ -87,6 +87,7 @@ bool ClientConfig::Load(const std::wstring& coopDirectory) {
     updateUrl = ini.Get("game", "update_url", updateUrl);
 
     debugOverlay = ini.GetBool("debug", "overlay", debugOverlay);
+    radioDebug = ini.GetBool("debug", "radio", radioDebug);
     cleanScreen = ini.GetBool("debug", "clean_screen", cleanScreen);
     verboseLog = ini.GetBool("debug", "verbose_log", verboseLog);
     forceRelay = ini.GetBool("debug", "force_relay", forceRelay);

@@ -35,6 +35,10 @@ const std::vector<TrackInfo>& Playlist();
 bool IsStreamingEnabled();
 void SetStreamingEnabled(bool on);
 
+// Debug overlay toggle
+bool IsDebugHudEnabled();
+void SetDebugHudEnabled(bool on);
+
 }  // namespace coop::music
 
 namespace coop::ui {
