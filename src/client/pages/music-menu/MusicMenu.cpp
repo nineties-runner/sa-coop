@@ -41,7 +41,7 @@ constexpr uint32_t kText = 0xFFE6E9EF;
 // Audio constants
 constexpr int kMusicRate = 22050; // 22.05 kHz stereo
 constexpr int kMusicChannels = 2;
-constexpr int kFrameSamplesPerChan = 441; // 20 ms per channel
+constexpr int kFrameSamplesPerChan = 440; // ~20 ms per channel (must be even: ADPCM packs 2 samples per byte)
 constexpr int kFrameTotalSamples = kFrameSamplesPerChan * kMusicChannels; // 882 samples total
 constexpr int kOutBuffers = 16;
 constexpr size_t kStartBuffer = 4;
@@ -66,12 +66,20 @@ std::atomic<float> g_volume{0.85f};
 std::atomic<bool> g_streamToPassengers{true};
 
 std::atomic<bool> g_driverActive{false};
+std::atomic<bool> g_inCar{false};
+std::atomic<bool> g_advance{false};
+std::atomic<uint32_t> g_loadGen{0};
+std::mutex g_msgMx;
+struct PlayMsg { bool ok; std::string title; };
+std::vector<PlayMsg> g_msgs;
 std::atomic<bool> g_hasPassengers{false};
 std::atomic<bool> g_passengerActive{false};
 std::atomic<float> g_gameRadioVol{1.0f};
 
 float g_driverFade = 0.0f;
 float g_recvFade = 0.0f;
+bool g_wasDriverActive = false;
+bool g_wasPassengerActive = false;
 
 DecodedTrack g_loadedTrack;
 size_t g_playbackSamplePos = 0;
@@ -185,6 +193,7 @@ std::atomic<bool> g_threadRunning{true};
 std::thread g_audioThread;
 
 void AudioThreadFunc() {
+    music::AutoScanUserTracks();
     adpcm::State encStateL;
     adpcm::State encStateR;
 
@@ -193,9 +202,11 @@ void AudioThreadFunc() {
 
         // 1. Local playback & stream sending (Driver on USER TRACK PLAYER)
         bool driverActive = g_driverActive.load();
-        if (!driverActive) {
+        bool shouldPlayLocal = g_isPlaying.load() && !g_isPaused.load() &&
+                               driverActive;
+        if (!shouldPlayLocal) {
             g_driverFade = 0.0f;
-        } else if (g_isPlaying.load() && !g_isPaused.load()) {
+        } else {
             std::lock_guard<std::mutex> lock(g_playerMx);
             if (!g_loadedTrack.pcm.empty() && g_playbackSamplePos < g_loadedTrack.totalSamples) {
                 // Ensure waveOut open
@@ -259,7 +270,7 @@ void AudioThreadFunc() {
                     waveOutWrite(g_waveOut, &h, sizeof(h));
 
                     // Send audio frame to passengers if we are driver and streaming enabled
-                    if (g_streamToPassengers.load() && Net().Online()) {
+                    if (driverActive && g_streamToPassengers.load() && Net().Online()) {
                         auto encL = adpcm::Encode(chanStreamL, kFrameSamplesPerChan, encStateL);
                         auto encR = adpcm::Encode(chanStreamR, kFrameSamplesPerChan, encStateR);
 
@@ -268,7 +279,7 @@ void AudioThreadFunc() {
                         bool sendTitle = (g_streamSeq % 50 == 1);
                         w.U8(sendTitle ? 1 : 0);
                         if (sendTitle) {
-                            std::string curTitle = music::CurrentTrackTitle();
+                            std::string curTitle = (g_currentIndex >= 0 && g_currentIndex < (int)g_playlist.size()) ? g_playlist[g_currentIndex].title : std::string();  // g_playerMx is held here
                             w.Str(curTitle.empty() ? "User Track" : curTitle);
                         }
                         w.U16((uint16_t)encL.size());
@@ -281,7 +292,7 @@ void AudioThreadFunc() {
                 }
 
                 if (g_playbackSamplePos >= g_loadedTrack.totalSamples) {
-                    music::Next();
+                    g_advance = true;
                 }
             }
         }
@@ -291,25 +302,17 @@ void AudioThreadFunc() {
         if (!passengerActive) {
             g_recvFade = 0.0f;
         } else {
-            std::vector<AudioFrame> toPlay;
+            // Check timeout
             {
                 std::lock_guard<std::mutex> lock(g_recvMx);
                 if (NowMs() - g_lastRecvMs > 1500) {
                     g_recvQueue.clear();
                     g_recvPlaying = false;
                     g_recvFade = 0.0f;
-                } else if (!g_recvQueue.empty()) {
-                    if (g_recvPlaying || g_recvQueue.size() >= kStartBuffer) {
-                        g_recvPlaying = true;
-                        while (!g_recvQueue.empty() && toPlay.size() < 4) {
-                            toPlay.push_back(g_recvQueue.front());
-                            g_recvQueue.pop_front();
-                        }
-                    }
                 }
             }
 
-            if (!toPlay.empty()) {
+            if (g_recvPlaying || g_rxQueueSize.load() >= kStartBuffer) {
                 if (!g_recvWaveOut) {
                     WAVEFORMATEX f = FormatMusic();
                     if (waveOutOpen(&g_recvWaveOut, WAVE_MAPPER, &f, 0, 0, CALLBACK_NULL) == MMSYSERR_NOERROR) {
@@ -317,18 +320,22 @@ void AudioThreadFunc() {
                     }
                 }
                 if (g_recvWaveOut) {
-                    size_t played = 0;
                     float gameVol = g_gameRadioVol.load();
                     float userVol = g_volume.load();
                     float masterVol = gameVol * userVol;
                     constexpr float kFadeStep = 1.0f / (float)(kMusicRate * 1.2f); // ~1.2s fade-in
 
-                    for (int i = 0; i < kOutBuffers && played < toPlay.size(); ++i) {
+                    std::lock_guard<std::mutex> lock(g_recvMx);
+                    for (int i = 0; i < kOutBuffers; ++i) {
+                        if (g_recvQueue.empty()) break;
                         WAVEHDR& h = g_recvWaveHdr[i];
                         if (!(h.dwFlags & WHDR_DONE)) continue;
                         if (h.dwFlags & WHDR_PREPARED) waveOutUnprepareHeader(g_recvWaveOut, &h, sizeof(h));
 
-                        const AudioFrame& src = toPlay[played++];
+                        g_recvPlaying = true;
+                        AudioFrame src = g_recvQueue.front();
+                        g_recvQueue.pop_front();
+
                         for (int k = 0; k < kFrameSamplesPerChan; ++k) {
                             if (g_recvFade < 1.0f) {
                                 g_recvFade = std::min(1.0f, g_recvFade + kFadeStep);
@@ -346,6 +353,7 @@ void AudioThreadFunc() {
                         waveOutPrepareHeader(g_recvWaveOut, &h, sizeof(h));
                         waveOutWrite(g_recvWaveOut, &h, sizeof(h));
                     }
+                    g_rxQueueSize.store((uint32_t)g_recvQueue.size());
                 }
             }
         }
@@ -357,25 +365,39 @@ void AudioThreadFunc() {
 namespace music {
 
 void PlayTrack(int index) {
-    std::lock_guard<std::mutex> lock(g_playerMx);
-    if (index < 0 || index >= (int)g_playlist.size()) return;
-    g_currentIndex = index;
-    if (LoadMp3File(g_playlist[index].path, g_loadedTrack)) {
-        g_playbackSamplePos = 0;
-        g_driverFade = 0.0f;
-        g_isPlaying = true;
-        g_isPaused = false;
-        ui::TheChat().AddSystem(Format(TR("Играет: %s", "Playing: %s"), g_playlist[index].title.c_str()));
-        if (radio::CarRadio()) {
-            CPlayerPed* me = FindPlayerPed(0);
-            CVehicle* v = me ? me->VehicleIfIn() : nullptr;
-            if (v && v->Driver() == me && radio::RequestedStation() != radio::RADIO_USER_TRACKS) {
-                radio::TuneToUserTracks();
-            }
-        }
-    } else {
-        ui::TheChat().AddError(Format(TR("Не удалось открыть MP3: %s", "Failed to load MP3: %s"), g_playlist[index].title.c_str()));
+    std::wstring path;
+    std::string title;
+    uint32_t gen;
+    {
+        std::lock_guard<std::mutex> lock(g_playerMx);
+        if (index < 0 || index >= (int)g_playlist.size()) return;
+        g_currentIndex = index;
+        path = g_playlist[index].path;
+        title = g_playlist[index].title;
+        g_isPlaying = false;
+        gen = ++g_loadGen;
     }
+    if (radio::CarRadio()) {
+        CPlayerPed* me = FindPlayerPed(0);
+        CVehicle* v = me ? me->VehicleIfIn() : nullptr;
+        if (v && v->Driver() == me && radio::RequestedStation() != radio::RADIO_USER_TRACKS) radio::TuneToUserTracks();
+    }
+    // the decode takes seconds for a long MP3: never on the game's thread
+    std::thread([path, title, gen]() {
+        DecodedTrack decoded;
+        bool ok = LoadMp3File(path, decoded);
+        std::lock_guard<std::mutex> lock(g_playerMx);
+        if (gen != g_loadGen.load()) return;  // another track was chosen meanwhile
+        if (ok) {
+            g_loadedTrack = std::move(decoded);
+            g_playbackSamplePos = 0;
+            g_driverFade = 0.0f;
+            g_isPlaying = true;
+            g_isPaused = false;
+        }
+        std::lock_guard<std::mutex> ml(g_msgMx);
+        g_msgs.push_back({ok, title});
+    }).detach();
 }
 
 void TogglePause() {
@@ -394,18 +416,18 @@ void Stop() {
 }
 
 void Next() {
-    std::lock_guard<std::mutex> lock(g_playerMx);
+    std::unique_lock<std::mutex> lock(g_playerMx);
     if (g_playlist.empty()) return;
     int next = (g_currentIndex + 1) % (int)g_playlist.size();
-    lock.~lock_guard();
+    lock.unlock();
     PlayTrack(next);
 }
 
 void Prev() {
-    std::lock_guard<std::mutex> lock(g_playerMx);
+    std::unique_lock<std::mutex> lock(g_playerMx);
     if (g_playlist.empty()) return;
     int prev = (g_currentIndex - 1 + (int)g_playlist.size()) % (int)g_playlist.size();
-    lock.~lock_guard();
+    lock.unlock();
     PlayTrack(prev);
 }
 
@@ -435,6 +457,7 @@ float DurationSeconds() {
 
 void AddFile(const std::wstring& path) {
     std::lock_guard<std::mutex> lock(g_playerMx);
+    for (const auto& t : g_playlist) if (t.path == path) return;
     TrackInfo ti;
     ti.path = path;
     size_t sep = path.find_last_of(L"\\/");
@@ -464,6 +487,7 @@ void AddDirectory(const std::wstring& dir) {
 }
 
 void AutoScanUserTracks() {
+    if (!Playlist().empty()) return;
     wchar_t myDocs[MAX_PATH] = {};
     if (SHGetFolderPathW(nullptr, CSIDL_MYDOCUMENTS, nullptr, SHGFP_TYPE_CURRENT, myDocs) == S_OK) {
         std::wstring ut = std::wstring(myDocs) + L"\\GTA San Andreas User Files\\User Tracks";
@@ -712,12 +736,9 @@ public:
             if (!v || v->Driver() == me || !radio::CarRadio(v)) return;
 
             const RemotePlayer* rp = radio::RemoteDriver();
-            if (!rp || rp->id != from) return; // not passenger of this driver
-
-            // Ensure passenger radio is tuned to USER TRACK PLAYER
-            if (radio::RequestedStation() != radio::RADIO_USER_TRACKS) {
-                radio::TuneToUserTracks();
-            }
+            NetVehicle* nv = Vehicles::Instance().Find(v);
+            bool isOurDriver = (rp && rp->id == from) || (nv && nv->owner == from);
+            if (!isOurDriver) return;
 
             std::vector<int16_t> pcmL, pcmR;
             if (!adpcm::Decode(dataL.data(), dataL.size(), pcmL) || !adpcm::Decode(dataR.data(), dataR.size(), pcmR)) return;
@@ -755,12 +776,24 @@ public:
         float gameVol = radio::GameRadioVolume();
 
         g_driverActive.store(driverActive);
+        g_inCar.store(v != nullptr);
+        if (g_advance.exchange(false)) music::Next();
+        {
+            std::vector<PlayMsg> msgs;
+            {
+                std::lock_guard<std::mutex> ml(g_msgMx);
+                msgs.swap(g_msgs);
+            }
+            for (auto& m : msgs) {
+                if (m.ok) ui::TheChat().AddSystem(Format(TR("Играет: %s", "Playing: %s"), m.title.c_str()));
+                else ui::TheChat().AddError(Format(TR("Не удалось открыть MP3: %s", "Failed to load MP3: %s"), m.title.c_str()));
+            }
+        }
         g_passengerActive.store(passengerActive);
         g_gameRadioVol.store(gameVol);
 
         // Notify passenger on connect/disconnect
-        static bool s_wasPassengerActive = false;
-        if (passengerActive && !s_wasPassengerActive) {
+        if (passengerActive && !g_wasPassengerActive) {
             std::string trackName;
             {
                 std::lock_guard<std::mutex> lock(g_rxTitleMx);
@@ -768,17 +801,20 @@ public:
             }
             if (trackName.empty()) trackName = TR("Поток водителя", "Driver's stream");
             ui::TheChat().AddSystem(Format(TR("Радиопоток водителя подключён: %s", "Connected to driver's radio stream: %s"), trackName.c_str()));
-        } else if (!passengerActive && s_wasPassengerActive && isPassenger) {
+        } else if (!passengerActive && g_wasPassengerActive && isPassenger) {
             ui::TheChat().AddSystem(TR("Радиопоток водителя отключён.", "Driver's radio stream disconnected."));
         }
-        s_wasPassengerActive = passengerActive;
+        g_wasPassengerActive = passengerActive;
 
         // Check if car has riders
         int riderCount = 0;
         if (driverActive && Net().Online()) {
             if (v) {
+                NetVehicle* nv = Vehicles::Instance().Find(v);
                 for (auto& [id, rp] : Players::Instance().All()) {
-                    if (rp.ped && rp.ped->VehicleIfIn() == v) {
+                    bool inCar = (rp.ped && rp.ped->VehicleIfIn() == v) ||
+                                 (nv && rp.vehNetId == nv->netId && rp.seat >= 0);
+                    if (inCar) {
                         riderCount++;
                     }
                 }
@@ -787,20 +823,36 @@ public:
         g_hasPassengers.store(riderCount > 0);
         g_riderCount.store(riderCount);
 
-        // Auto-resume driver's track when tuning into USER TRACK PLAYER
-        static bool s_wasDriverActive = false;
-        if (driverActive && !s_wasDriverActive) {
-            std::lock_guard<std::mutex> lock(g_playerMx);
-            if (g_currentIndex >= 0 && !g_loadedTrack.pcm.empty() && !g_isPlaying.load()) {
-                g_isPlaying = true;
-                g_isPaused = false;
-                g_driverFade = 0.0f;
+        // Auto-resume driver's track when tuning into USER TRACK PLAYER or after reconnect
+        if (driverActive) {
+            if (!g_wasDriverActive) {
+                music::AutoScanUserTracks();
+                if (!music::Playlist().empty()) {
+                    if (g_isPlaying.load() && g_isPaused.load()) {
+                        music::TogglePause();
+                    } else if (!g_isPlaying.load()) {
+                        int idx = music::CurrentTrackIndex();
+                        music::PlayTrack(idx >= 0 ? idx : 0);
+                    }
+                    g_driverFade = 0.0f;
+                }
+            } else if (!g_isPlaying.load() && !g_isPaused.load()) {
+                music::AutoScanUserTracks();
+                if (!music::Playlist().empty()) {
+                    int idx = music::CurrentTrackIndex();
+                    music::PlayTrack(idx >= 0 ? idx : 0);
+                    g_driverFade = 0.0f;
+                }
+            }
+        } else if (g_wasDriverActive) {
+            if (g_isPlaying.load() && !g_isPaused.load()) {
+                music::TogglePause();
             }
         }
-        s_wasDriverActive = driverActive;
+        g_wasDriverActive = driverActive;
 
-        // Cleanup receiver if passenger left car or driver tuned away
-        if (!passengerActive) {
+        // Cleanup receiver if player is not a passenger in a vehicle
+        if (!isPassenger) {
             std::lock_guard<std::mutex> lock(g_recvMx);
             if (!g_recvQueue.empty() || g_recvPlaying) {
                 g_recvQueue.clear();
@@ -854,9 +906,62 @@ public:
         }
     }
 
+    void OnSessionStart() override {
+        g_wasDriverActive = false;
+        g_wasPassengerActive = false;
+        {
+            std::lock_guard<std::mutex> lock(g_recvMx);
+            g_recvQueue.clear();
+            g_recvPlaying = false;
+            g_lastRecvMs = 0;
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_rxTitleMx);
+            g_rxTrackTitle.clear();
+        }
+        g_rxPackets = 0;
+        g_txPackets = 0;
+        g_rxQueueSize = 0;
+        g_riderCount = 0;
+        g_streamSeq = 0;
+        g_driverFade = 0.0f;
+        g_recvFade = 0.0f;
+        music::AutoScanUserTracks();
+    }
+
     void OnSessionEnd() override {
         music::Stop();
         CloseRecvWaveOut();
+        g_wasDriverActive = false;
+        g_wasPassengerActive = false;
+        {
+            std::lock_guard<std::mutex> lock(g_recvMx);
+            g_recvQueue.clear();
+            g_recvPlaying = false;
+            g_lastRecvMs = 0;
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_rxTitleMx);
+            g_rxTrackTitle.clear();
+        }
+        g_rxPackets = 0;
+        g_txPackets = 0;
+        g_rxQueueSize = 0;
+        g_riderCount = 0;
+        g_streamSeq = 0;
+        g_driverFade = 0.0f;
+        g_recvFade = 0.0f;
+    }
+
+    void OnPeerLeave(uint8_t id) override {
+        const RemotePlayer* rd = radio::RemoteDriver();
+        if (!rd || rd->id == id) {
+            std::lock_guard<std::mutex> lock(g_recvMx);
+            g_recvQueue.clear();
+            g_recvPlaying = false;
+            g_lastRecvMs = 0;
+            CloseRecvWaveOut();
+        }
     }
 
     void OnGameShutdown() override {

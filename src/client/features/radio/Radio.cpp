@@ -32,9 +32,7 @@ using namespace game;
 
 constexpr uintptr_t kRadio = 0x8CB6F8;          // AERadioTrackManager (CAERadioTrackManager, 0x370)
 constexpr uintptr_t kAudioEngine = 0xB6BC90;    // AudioEngine
-// CAEVehicleAudioEntity::s_pVehicleAudioSettingsForRadio: the settings of the car this game's player rides in, set by
 // TurnOnRadioForVehicle (0x4F5B20) for the driver and the passengers alike
-constexpr uintptr_t kRadioCarSettings = 0xB6B99C;
 
 // CAERadioTrackManager
 constexpr int kMode = 0x68;                 // m_nMode (eRadioTrackMode)
@@ -60,7 +58,12 @@ constexpr int kQueueLength = 5;
 enum : int8_t { RADIO_USER_TRACKS = 12, RADIO_OFF = 13 };
 enum : int32_t { MODE_PLAYING = 2 };
 enum : uint8_t { RADIO_TYPE_CIVILIAN = 0 };
-enum : int { AE_FRONTEND_RADIO_RETUNE_START = 0x22, AE_FRONTEND_RADIO_CLICK_ON = 0x25, AE_FRONTEND_RADIO_CLICK_OFF = 0x26 };
+enum : int {
+    AE_FRONTEND_RADIO_RETUNE_START = 0x22,
+    AE_FRONTEND_RADIO_RETUNE_STOP  = 0x23,
+    AE_FRONTEND_RADIO_CLICK_ON     = 0x25,
+    AE_FRONTEND_RADIO_CLICK_OFF    = 0x26
+};
 
 constexpr uint64_t kResendMs = 3000;     // the driver's correction for the passengers
 constexpr uint64_t kStaleMs = 10000;     // the driver's radio is not known any more
@@ -77,20 +80,19 @@ namespace radio {
 
 bool CarRadio(game::CVehicle* v) {
     if (!v) return false;
+    if (v->IsTrain()) return false;
     int sub = v->VehicleSubClass();
     if (sub == game::VEHICLE_TYPE_BIKE || sub == game::VEHICLE_TYPE_BMX ||
         sub == game::VEHICLE_TYPE_BOAT || sub == game::VEHICLE_TYPE_TRAILER) {
         return false;
     }
-    uint8_t radioType = Field<uint8_t>(v, 0x1D3);
-    return radioType == RADIO_TYPE_CIVILIAN;
+    return Field<uint8_t>(v, 0x1D3) == RADIO_TYPE_CIVILIAN;
 }
 
 bool CarRadio() {
     game::CPlayerPed* me = game::FindPlayerPed(0);
     if (me && me->VehicleIfIn()) return CarRadio(me->VehicleIfIn());
-    auto* settings = Ref<uint8_t*>(kRadioCarSettings);
-    return settings && settings[0x1B] == RADIO_TYPE_CIVILIAN;
+    return false;
 }
 
 const RemotePlayer* RemoteDriver() {
@@ -104,6 +106,11 @@ const RemotePlayer* RemoteDriver() {
     }
     NetVehicle* nv = Vehicles::Instance().Find(v);
     if (nv) {
+        if (nv->owner != Net().MyId()) {
+            if (RemotePlayer* rp = Players::Instance().Get(nv->owner)) {
+                if (rp->ped != me) return rp;
+            }
+        }
         for (auto& [id, player] : Players::Instance().All()) {
             if (player.vehNetId == nv->netId && player.seat < 0 && player.ped != me) {
                 return &player;
@@ -163,11 +170,27 @@ bool ReadLocal(RadioState& s) {
 RadioState g_sent;
 std::vector<uint8_t> g_sentTo;  // the players who rode with us when we last sent
 uint64_t g_sentMs = 0;
+bool g_driverStoppedRetune = false;
 
 void DriverUpdate() {
     CPlayerPed* me = FindPlayerPed(0);
     CVehicle* v = me ? me->VehicleIfIn() : nullptr;
     NetVehicle* nv = v && v->Driver() == me && CarRadio(v) ? Vehicles::Instance().Find(v) : nullptr;
+
+    if (radio::IsDriverOnUserTracks()) {
+        if (!g_driverStoppedRetune) {
+            FrontendSound(AE_FRONTEND_RADIO_RETUNE_STOP);
+            g_driverStoppedRetune = true;
+        }
+        if (Field<int32_t>(Radio(), kMode) != MODE_PLAYING) {
+            Field<int32_t>(Radio(), 0xE0) = -2;
+            Field<int32_t>(Radio(), kMode) = MODE_PLAYING;
+            Active<int8_t>(kStation) = RADIO_USER_TRACKS;
+        }
+    } else {
+        g_driverStoppedRetune = false;
+    }
+
     std::vector<uint8_t> riders;
     if (nv)
         for (auto& [id, rp] : Players::Instance().All())
@@ -234,10 +257,22 @@ void Tune(int8_t station, const RadioState* s) {
     CallMethod<0x4EB3C0>(Radio(), station, Active<int8_t>(kBass), Active<float>(kBassGain), (uint8_t)0);
     if (Requested<int8_t>(kStation) != station) return;  // a mission's ambience track holds the radio
     if (station != was) {
-        FrontendSound(station == RADIO_OFF ? AE_FRONTEND_RADIO_CLICK_OFF
-                      : was == RADIO_OFF   ? AE_FRONTEND_RADIO_CLICK_ON
-                                           : AE_FRONTEND_RADIO_RETUNE_START);
+        if (station == RADIO_OFF) {
+            FrontendSound(AE_FRONTEND_RADIO_CLICK_OFF);
+        } else if (station == RADIO_USER_TRACKS) {
+            FrontendSound(was == RADIO_OFF ? AE_FRONTEND_RADIO_CLICK_ON : AE_FRONTEND_RADIO_RETUNE_STOP);
+        } else if (was == RADIO_OFF) {
+            FrontendSound(AE_FRONTEND_RADIO_CLICK_ON);
+        } else {
+            FrontendSound(AE_FRONTEND_RADIO_RETUNE_START);
+        }
         Field<uint8_t>(Radio(), 0x01) = 1;  // m_bDisplayStationName
+    }
+    if (station == RADIO_USER_TRACKS) {
+        FrontendSound(AE_FRONTEND_RADIO_RETUNE_STOP);
+        Field<int32_t>(Radio(), 0xE0) = -2;
+        Field<int32_t>(Radio(), kMode) = MODE_PLAYING;
+        Active<int8_t>(kStation) = RADIO_USER_TRACKS;
     }
     g_pending = true;
     g_pendingMs = NowMs();
@@ -296,11 +331,7 @@ bool IsPassengerOnUserTracks() {
 
 bool ShouldMuteNativeRadio() {
     if (!CarRadio()) return false;
-    if (IsDriverOnUserTracks()) return true;
-    if (IsPassengerOnUserTracks()) return true;
-    int8_t req = Requested<int8_t>(kStation);
-    int8_t act = Active<int8_t>(kStation);
-    return (req == RADIO_USER_TRACKS || act == RADIO_USER_TRACKS);
+    return RequestedStation() == RADIO_USER_TRACKS;
 }
 
 float GameRadioVolume() {
@@ -388,7 +419,16 @@ void Handle(uint8_t from, Reader& r) {
 using RetuneFn = void(__fastcall*)(void*, void*);
 RetuneFn g_origRetune = nullptr;
 void __fastcall HookCheckForStationRetune(void* radio, void* edx) {
-    if (!RemoteDriver()) return g_origRetune(radio, edx);
+    if (!RemoteDriver()) {
+        g_origRetune(radio, edx);
+        if (Requested<int8_t>(kStation) == RADIO_USER_TRACKS) {
+            FrontendSound(AE_FRONTEND_RADIO_RETUNE_STOP);
+            Field<int32_t>(radio, 0xE0) = -2;
+            Field<int32_t>(radio, kMode) = MODE_PLAYING;
+            Active<int8_t>(kStation) = RADIO_USER_TRACKS;
+        }
+        return;
+    }
     Field<int32_t>(radio, kStationsListed) = Field<int32_t>(radio, kStationsListDown) = 0;
     Field<int32_t>(radio, kScriptRequest) = -1;
     Field<uint8_t>(radio, 0x06) = 0;  // m_bRetuneJustStarted
@@ -397,7 +437,16 @@ void __fastcall HookCheckForStationRetune(void* radio, void* edx) {
 // -> CheckForStationRetuneDuringPause: the menu's choice while the game is paused
 RetuneFn g_origRetunePaused = nullptr;
 void __fastcall HookCheckForStationRetuneDuringPause(void* radio, void* edx) {
-    if (!RemoteDriver()) return g_origRetunePaused(radio, edx);
+    if (!RemoteDriver()) {
+        g_origRetunePaused(radio, edx);
+        if (Requested<int8_t>(kStation) == RADIO_USER_TRACKS) {
+            FrontendSound(AE_FRONTEND_RADIO_RETUNE_STOP);
+            Field<int32_t>(radio, 0xE0) = -2;
+            Field<int32_t>(radio, kMode) = MODE_PLAYING;
+            Active<int8_t>(kStation) = RADIO_USER_TRACKS;
+        }
+        return;
+    }
     Field<int32_t>(radio, kMenuRequest) = -1;
 }
 
@@ -408,8 +457,12 @@ using PlayTrackFn = void(__fastcall*)(void*, void*, uint32_t, int32_t, uint32_t,
 PlayTrackFn g_origPlayTrack = nullptr;
 void __fastcall HookPlayTrack(void* hw, void* edx, uint32_t track, int32_t next, uint32_t offset, uint8_t flags,
                               uint8_t user, uint8_t userNext) {
-    if (user || radio::ShouldMuteNativeRadio()) {
-        // Mute native user tracks: our custom player streams/plays the audio
+    if (user) {
+        // Silences native GTA SA User Track Player: our custom MP3 player plays & streams instead
+        FrontendSound(AE_FRONTEND_RADIO_RETUNE_STOP);
+        Field<int32_t>(Radio(), 0xE0) = -2;
+        Field<int32_t>(Radio(), kMode) = MODE_PLAYING;
+        Active<int8_t>(kStation) = RADIO_USER_TRACKS;
         return;
     }
     if (g_pending && g_pendingSync && g_pendingTrack >= 0 && (int32_t)track == g_pendingTrack) {
@@ -430,12 +483,24 @@ public:
         mem::RedirectCallFn(0x4EB9FD, &HookCheckForStationRetuneDuringPause, &g_origRetunePaused);
         mem::RedirectCallFn(0x4EBB11, &HookPlayTrack, &g_origPlayTrack);
 
+        // Allow USER TRACK PLAYER (station 12) even when native game has 0 user tracks scanned
+        mem::Nop(0x4EB7B5, 2);                      // jbe in CheckForStationRetune
+        mem::Put<uint8_t>(0x4E82A0, 0xEB);         // ja -> jmp in RetuneRadio
+        game::Ref<uint16_t>(0xB6B976) = 1;         // CAEUserRadioTrackManager::m_nUserTracksLoaded
+
         Net().SetHandler(proto::G_RADIO, [](uint8_t from, Reader& r) { Handle(from, r); });
     }
-    void OnSessionStart() override { Reset(); }
+    void OnSessionStart() override {
+        game::Ref<uint16_t>(0xB6B976) = 1;
+        Reset();
+    }
     void OnSessionEnd() override { Reset(); }
     void OnGameShutdown() override { Reset(); }
-    void OnPeerLeave(uint8_t id) override { g_drivers.erase(id); }
+    void OnPeerLeave(uint8_t id) override {
+        g_drivers.erase(id);
+        g_sentTo.clear();
+        g_sentMs = 0;
+    }
 
     void OnPostProcess() override {
         if (!Net().Online() || !core::IsPlayerReady()) return;
@@ -453,6 +518,8 @@ private:
         g_drivers.clear();
         g_sentTo.clear();
         g_sent = {};
+        g_sentMs = 0;
+        g_driverStoppedRetune = false;
         g_pending = g_pendingSync = false;
         g_playTrackMs = 0;
     }
