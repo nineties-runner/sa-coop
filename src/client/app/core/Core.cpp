@@ -252,14 +252,14 @@ void HandleChatSubmit(const std::string& text) {
         }
         if (cmd == "fontsize" || cmd == "chatsize") {
             if (args.empty()) {
-                ui::TheChat().AddSystem(Format(TR("Текущий размер чата: %.2f (от 0.5 до 2.0). Пример: /fontsize 1.3",
-                                                  "Current chat font size: %.2f (from 0.5 to 2.0). Example: /fontsize 1.3"),
+                ui::TheChat().AddSystem(Format(TR("Текущий размер чата: %.2f (от 0.25 до 2.0). Пример: /fontsize 1.3",
+                                                  "Current chat font size: %.2f (from 0.25 to 2.0). Example: /fontsize 1.3"),
                                                Cfg().chatFontSize));
             } else {
                 float sz = (float)atof(args[0].c_str());
                 if (sz <= 0.0f) {
-                    ui::TheChat().AddError(TR("Укажите число от 0.5 до 2.0. Пример: /fontsize 1.2",
-                                              "Specify a number from 0.5 to 2.0. Example: /fontsize 1.2"));
+                    ui::TheChat().AddError(TR("Укажите число от 0.25 до 2.0. Пример: /fontsize 1.2",
+                                              "Specify a number from 0.25 to 2.0. Example: /fontsize 1.2"));
                 } else {
                     ui::TheChat().SetFontSize(sz);
                 }

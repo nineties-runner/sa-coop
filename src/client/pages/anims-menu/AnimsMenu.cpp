@@ -167,7 +167,13 @@ void RenderAnimsMenu() {
         else if (hover) g.Rect(cx, itemY, listW, itemH, 0x8016202A);
 
         if (hover && In().State().lmbPressed) {
-            g_selected = g_scroll + k;
+            if (g_selected != g_scroll + k) {
+                g_selected = g_scroll + k;
+                const char* pb = nullptr;
+                const char* pa = nullptr;
+                emotes::GetAllAnim(g_filtered[g_selected], pb, pa);
+                emotes::PlayRaw(pb, pa, g_looped);
+            }
         }
 
         std::string bStr = block;
@@ -254,11 +260,19 @@ void RenderAnimsMenu() {
             if (g_selected > 0) {
                 --g_selected;
                 if (g_selected < g_scroll) g_scroll = g_selected;
+                const char* pb = nullptr;
+                const char* pa = nullptr;
+                emotes::GetAllAnim(g_filtered[g_selected], pb, pa);
+                emotes::PlayRaw(pb, pa, g_looped);
             }
         } else if (vk == VK_DOWN) {
             if (g_selected + 1 < (int)g_filtered.size()) {
                 ++g_selected;
                 if (g_selected >= g_scroll + visibleCount) g_scroll = g_selected - visibleCount + 1;
+                const char* pb = nullptr;
+                const char* pa = nullptr;
+                emotes::GetAllAnim(g_filtered[g_selected], pb, pa);
+                emotes::PlayRaw(pb, pa, g_looped);
             }
         }
     }

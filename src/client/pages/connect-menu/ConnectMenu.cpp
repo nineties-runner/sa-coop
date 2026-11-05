@@ -11,6 +11,8 @@
 #include "entities/session/Flow.h"
 #include "shared/api/net-session/Session.h"
 #include "features/updater/Updater.h"
+#include "pages/connect-menu/SkinPreview.h"
+#include "pages/connect-menu/SkinNames.h"
 #include "shared/config/Config.h"
 #include "shared/game/Game.h"
 #include "shared/lib/core/Core.h"
@@ -268,31 +270,28 @@ void RenderConnectMenu() {
             const char* names[] = {TR("обычный (синий)", "default (blue)"), TR("белый", "white"), TR("красный", "red"),
                                    TR("зелёный", "green"), TR("жёлтый", "yellow")};
             int i = 0;
-            while (i < 5 && Cfg().markColour != kColours[i]) ++i;  // 5: a colour of one's own (RRGGBB)
-            cy += 18 * s;
+            while (i < 5 && Cfg().markColour != kColours[i]) ++i;
+            cy += 14 * s;
             caption(cx, TR("Цвет вашей метки у напарника", "Your mark's colour for your partner"));
-            caption(cx + 380 * s, TR("Скин (ID 0–311)", "Skin (ID 0–311)"));
             cy += ch + 6 * s;
-            if (int d = w::Selector("blip", cx, cy, 360 * s, rowH, i < 5 ? names[i] : Cfg().markColour))
+            if (int d = w::Selector("blip", cx, cy, 320 * s, rowH, i < 5 ? names[i] : Cfg().markColour))
                 Players::Instance().SetMarkColour(kColours[((i < 5 ? i : 0) + d + 5) % 5]);
-            float sx = cx + 380 * s;
-            if (int d = w::Selector("skin_sel", sx, cy, 120 * s, rowH, Cfg().skin == 0 ? "0 (CJ)" : std::to_string(Cfg().skin)))
-                StepSkin(d);
-            bool skinEnter = w::TextBox("skin", sx + 128 * s, cy, 80 * s, rowH, g_skin, 3, false, true, "0");
-            const char* applyLabel = TR("Применить", "Apply");
-            if (skinEnter || item("skin_ok", sx + 216 * s + room, cy, applyLabel)) ApplySkin();
-            cy += rowH;
-        } else {
-            cy += 18 * s;
-            caption(cx, TR("Скин (ID 0–311)", "Skin (ID 0–311)"));
-            cy += ch + 6 * s;
-            if (int d = w::Selector("skin_sel", cx, cy, 140 * s, rowH, Cfg().skin == 0 ? "0 (CJ)" : std::to_string(Cfg().skin)))
-                StepSkin(d);
-            bool skinEnter = w::TextBox("skin", cx + 148 * s, cy, 90 * s, rowH, g_skin, 3, false, true, "0");
-            const char* applyLabel = TR("Применить", "Apply");
-            if (skinEnter || item("skin_ok", cx + 246 * s + room, cy, applyLabel)) ApplySkin();
             cy += rowH;
         }
+        cy += 14 * s;
+        caption(cx, TR("Скин персонажа (ID 0–311)", "Character skin (ID 0–311)"));
+        cy += ch + 6 * s;
+        if (int d = w::Selector("skin_sel", cx, cy, 120 * s, rowH, Cfg().skin == 0 ? "0 (CJ)" : std::to_string(Cfg().skin)))
+            StepSkin(d);
+        bool skinEnter = w::TextBox("skin", cx + 128 * s, cy, 70 * s, rowH, g_skin, 3, false, true, "0");
+        const char* applyLabel = TR("Применить", "Apply");
+        if (skinEnter || item("skin_ok", cx + 204 * s + room, cy, applyLabel)) ApplySkin();
+        const char* modelName = GetSkinModelName(Cfg().skin);
+        if (modelName && *modelName) {
+            g.Text(FONT_SMALL, cx + 330 * s, cy + (rowH - sh) * 0.5f, modelName, kSaMuted);
+        }
+        DrawSkinThumbnail(cx + cw - 52 * s, cy - 24 * s, 48 * s, 96 * s, Cfg().skin);
+        cy += rowH;
         if (!g_formError.empty()) {
             cy += 8 * s;
             para(g_formError, kSaRed, FONT_NORMAL, true);
@@ -338,15 +337,16 @@ void RenderConnectMenu() {
         cy += 16 * s;
 
         caption(cx, TR("Ник", "Nickname"));
-        caption(cx + 340 * s, TR("Скин (ID 0–311)", "Skin (ID 0–311)"));
+        caption(cx + 310 * s, TR("Скин (ID 0–311)", "Skin (ID 0–311)"));
         cy += ch + 6 * s;
-        bool enter = w::TextBox("nick", cx, cy, 320 * s, rowH, g_nick, 20);
-        float sx = cx + 340 * s;
-        if (int d = w::Selector("skin_sel", sx, cy, 130 * s, rowH, Cfg().skin == 0 ? "0 (CJ)" : std::to_string(Cfg().skin)))
+        bool enter = w::TextBox("nick", cx, cy, 290 * s, rowH, g_nick, 20);
+        float sx = cx + 310 * s;
+        if (int d = w::Selector("skin_sel", sx, cy, 110 * s, rowH, Cfg().skin == 0 ? "0 (CJ)" : std::to_string(Cfg().skin)))
             StepSkin(d);
-        bool skinEnter = w::TextBox("skin", sx + 138 * s, cy, 85 * s, rowH, g_skin, 3, false, true, "0");
+        bool skinEnter = w::TextBox("skin", sx + 118 * s, cy, 65 * s, rowH, g_skin, 3, false, true, "0");
         const char* applyLabel = TR("Применить", "Apply");
-        if (skinEnter || item("skin_ok", sx + 231 * s + room, cy, applyLabel)) ApplySkin();
+        if (skinEnter || item("skin_ok", sx + 190 * s + room, cy, applyLabel)) ApplySkin();
+        DrawSkinThumbnail(cx + cw - 48 * s, cy - 8 * s, 44 * s, 88 * s, Cfg().skin);
         cy += rowH + 14 * s;
 
         int hostSlot = 0;

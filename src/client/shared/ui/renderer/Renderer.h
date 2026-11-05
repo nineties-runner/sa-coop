@@ -44,6 +44,7 @@ public:
 
     void Rect(float x, float y, float w, float h, uint32_t argb);
     void RectOutline(float x, float y, float w, float h, uint32_t argb, float t = 1.0f);
+    void TexturedQuad(IDirect3DTexture9* tex, float x, float y, float w, float h, float u0, float v0, float u1, float v1, uint32_t argb = 0xFFFFFFFF);
     // Text in UTF-8. Supports inline colour codes {RRGGBB}.
     void Text(FontId f, float x, float y, std::string_view utf8, uint32_t argb, uint32_t flags = TEXT_SHADOW);
     void TextW(FontId f, float x, float y, std::wstring_view text, uint32_t argb, uint32_t flags = TEXT_SHADOW);

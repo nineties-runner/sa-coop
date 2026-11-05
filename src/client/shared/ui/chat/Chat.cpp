@@ -155,7 +155,7 @@ void Chat::ProcessInput() {
 }
 
 void Chat::SetFontSize(float scale) {
-    if (scale < 0.5f) scale = 0.5f;
+    if (scale < 0.25f) scale = 0.25f;
     if (scale > 2.0f) scale = 2.0f;
     Cfg().chatFontSize = scale;
     Ini ini;
@@ -171,7 +171,7 @@ void Chat::Render() {
     float s = g.Scale();
     float x = 24 * s, y = 24 * s;
     float fontScale = Cfg().chatFontSize;
-    if (fontScale < 0.5f) fontScale = 0.5f;
+    if (fontScale < 0.25f) fontScale = 0.25f;
     if (fontScale > 2.0f) fontScale = 2.0f;
     FontId font = (fontScale >= 1.25f) ? FONT_BIG : ((fontScale <= 0.85f) ? FONT_SMALL : FONT_NORMAL);
     float width = std::max(520.0f * s * fontScale, g.Width() * 0.36f * fontScale);

@@ -350,6 +350,12 @@ void Renderer::Quad(float x, float y, float w, float h, float u0, float v0, floa
     m_verts.push_back(d);
 }
 
+void Renderer::TexturedQuad(IDirect3DTexture9* tex, float x, float y, float w, float h, float u0, float v0, float u1, float v1, uint32_t argb) {
+    if (!m_inFrame || !tex || (argb >> 24) == 0) return;
+    SetTexture(tex);
+    Quad(x, y, w, h, u0, v0, u1, v1, argb);
+}
+
 void Renderer::Rect(float x, float y, float w, float h, uint32_t argb) {
     if (!m_inFrame || (argb >> 24) == 0) return;
     Font& f = m_fonts[FONT_NORMAL];
