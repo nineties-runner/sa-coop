@@ -176,27 +176,9 @@ void RenderConnectMenu() {
     w::BeginFrame();
     float cy = w::Panel(x, y, W, H, "SA:COOP") + 8 * s;
     float vx = x + W - 52 * s;
-    auto upState = updater::CurrentState();
-    if (upState == updater::State::Available) {
-        std::string upLabel = Format(TR("Обновить до %s", "Update to %s"), updater::LatestVersion().c_str());
-        float uw = g.TextWidth(FONT_SMALL, upLabel);
-        if (w::Button("btn_up_dl", vx - uw, y + 32 * s, uw + 16 * s, ch + 8 * s, upLabel, true, true, false)) {
-            updater::StartDownload();
-        }
-    } else if (upState == updater::State::Downloading) {
-        std::string pLabel = Format("%s %d%%", TR("Скачивание", "Downloading"), updater::DownloadProgress());
-        g.Text(FONT_SMALL, vx, y + 36 * s, pLabel, kSaGreen, TEXT_RIGHT);
-    } else if (upState == updater::State::ReadyToRestart) {
-        std::string rLabel = TR("Перезапустить сейчас", "Restart to update");
-        float rw = g.TextWidth(FONT_SMALL, rLabel);
-        if (w::Button("btn_up_rst", vx - rw, y + 32 * s, rw + 16 * s, ch + 8 * s, rLabel, true, true, false)) {
-            updater::ApplyAndRestart();
-        }
-    } else {
-        g.Text(FONT_MENU_SMALL, vx, y + 36 * s, "v" COOP_VERSION_STR, kSaSlate, TEXT_RIGHT);
-    }
-    // the language switch left of the version, the pointer at the active one; the choice is saved at once
-    float lx = vx - g.TextWidth(FONT_MENU_SMALL, "v" COOP_VERSION_STR) - 34 * s;
+
+    // Language switch on the right
+    float lx = vx;
     for (int en = 1; en >= 0; --en) {
         const char* label = en ? "EN" : "RU";
         float tw = g.TextWidth(FONT_MENU_SMALL, label);
@@ -206,7 +188,29 @@ void RenderConnectMenu() {
             flow::SaveConnectSettings();
             RefreshSlots();
         }
-        lx -= 52 * s;  // room for the pointer of EN
+        lx -= 48 * s;
+    }
+
+    // Version or Update button placed to the left of language switch
+    float upX = lx - 12 * s;
+    auto upState = updater::CurrentState();
+    if (upState == updater::State::Available) {
+        std::string upLabel = Format(TR("Обновить до %s", "Update to %s"), updater::LatestVersion().c_str());
+        float uw = g.TextWidth(FONT_SMALL, upLabel);
+        if (w::Button("btn_up_dl", upX - uw, y + 30 * s, uw + 16 * s, ch + 8 * s, upLabel, true, true, false)) {
+            updater::StartDownload();
+        }
+    } else if (upState == updater::State::Downloading) {
+        std::string pLabel = Format("%s %d%%", TR("Скачивание", "Downloading"), updater::DownloadProgress());
+        g.Text(FONT_SMALL, upX, y + 36 * s, pLabel, kSaGreen, TEXT_RIGHT);
+    } else if (upState == updater::State::ReadyToRestart) {
+        std::string rLabel = TR("Перезапустить сейчас", "Restart to update");
+        float rw = g.TextWidth(FONT_SMALL, rLabel);
+        if (w::Button("btn_up_rst", upX - rw, y + 30 * s, rw + 16 * s, ch + 8 * s, rLabel, true, true, false)) {
+            updater::ApplyAndRestart();
+        }
+    } else {
+        g.Text(FONT_MENU_SMALL, upX, y + 36 * s, "v" COOP_VERSION_STR, kSaSlate, TEXT_RIGHT);
     }
 
     auto caption = [&](float px, const std::string& text) { g.Text(FONT_MENU_SMALL, px, cy, text, kSaMuted); };

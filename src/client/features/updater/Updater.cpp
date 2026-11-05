@@ -232,6 +232,9 @@ void ApplyAndRestart() {
     std::wstring batPath = coopDir + L"apply_update.bat";
 
     // Write batch script to wait for gta_sa.exe exit, unpack via tar, and restart
+    std::string sGameDir = WideToUtf8(gameDir);
+    std::string sZipPath = WideToUtf8(zipPath);
+
     std::string script =
         "@echo off\r\n"
         "chcp 65001 >nul\r\n"
@@ -242,14 +245,12 @@ void ApplyAndRestart() {
         "    timeout /t 1 /nobreak >nul\r\n"
         "    goto wait_loop\r\n"
         ")\r\n"
-        "cd /d \"" + WideToUtf8(gameDir) + "\"\r\n"
-        "tar -xf \"" + WideToUtf8(zipPath) + "\" --overwrite\r\n"
-        "del /f /q \"" + WideToUtf8(zipPath) + "\" >nul 2>&1\r\n"
-        "start \"\" \"" + WideToUtf8(gameDir) + "gta_sa.exe\"\r\n"
+        "powershell -NoProfile -ExecutionPolicy Bypass -Command \"Expand-Archive -LiteralPath '" + sZipPath + "' -DestinationPath '" + sGameDir + "' -Force\"\r\n"
+        "del /f /q \"" + sZipPath + "\" >nul 2>&1\r\n"
+        "start \"\" \"" + sGameDir + "gta_sa.exe\"\r\n"
         "del /f /q \"%~f0\" >nul 2>&1\r\n"
         "exit\r\n";
-
-    std::ofstream out(batPath.c_str(), std::ios::binary);
+std::ofstream out(batPath.c_str(), std::ios::binary);
     out.write(script.data(), (std::streamsize)script.size());
     out.close();
 
