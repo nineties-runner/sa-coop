@@ -381,16 +381,7 @@ void Handle(uint8_t from, Reader& r) {
 
 // ---- hooks ----
 
-// CAERadioTrackManager::Service -> UpdateRadioVolume (0x4EA010): mutes native radio if on USER TRACK PLAYER
-using UpdateRadioVolumeFn = void(__fastcall*)(void*, void*);
-UpdateRadioVolumeFn g_origUpdateRadioVolume = nullptr;
-void __fastcall HookUpdateRadioVolume(void* radio, void* edx) {
-    g_origUpdateRadioVolume(radio, edx);
-    if (radio::ShouldMuteNativeRadio()) {
-        int16_t channel = Field<int16_t>(radio, 0x64);
-        CallMethod<0x4D8870>((void*)0xB5F8B8, (int32_t)channel, (int32_t)0, -100.0f, (uint32_t)0);
-    }
-}
+
 
 // CAERadioTrackManager::Service -> CheckForStationRetune: the retune buttons (CPad::ChangeStationJustDown/UpJustDown)
 // and RetuneRadio's requests (the scripts, the menu's audio page). A passenger of a remote driver keeps its station.
@@ -417,6 +408,10 @@ using PlayTrackFn = void(__fastcall*)(void*, void*, uint32_t, int32_t, uint32_t,
 PlayTrackFn g_origPlayTrack = nullptr;
 void __fastcall HookPlayTrack(void* hw, void* edx, uint32_t track, int32_t next, uint32_t offset, uint8_t flags,
                               uint8_t user, uint8_t userNext) {
+    if (user || radio::ShouldMuteNativeRadio()) {
+        // Mute native user tracks: our custom player streams/plays the audio
+        return;
+    }
     if (g_pending && g_pendingSync && g_pendingTrack >= 0 && (int32_t)track == g_pendingTrack) {
         const RadioState& s = g_pendingState;
         int32_t at = track == (uint32_t)s.tracks[0] ? DriverPos(s) : DriverPos(s) - s.length;
@@ -434,7 +429,7 @@ public:
         mem::RedirectCallFn(0x4EB9F4, &HookCheckForStationRetune, &g_origRetune);
         mem::RedirectCallFn(0x4EB9FD, &HookCheckForStationRetuneDuringPause, &g_origRetunePaused);
         mem::RedirectCallFn(0x4EBB11, &HookPlayTrack, &g_origPlayTrack);
-        mem::RedirectCallFn(0x4EBE97, &HookUpdateRadioVolume, &g_origUpdateRadioVolume);
+
         Net().SetHandler(proto::G_RADIO, [](uint8_t from, Reader& r) { Handle(from, r); });
     }
     void OnSessionStart() override { Reset(); }

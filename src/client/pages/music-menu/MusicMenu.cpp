@@ -369,7 +369,7 @@ void PlayTrack(int index) {
         if (radio::CarRadio()) {
             CPlayerPed* me = FindPlayerPed(0);
             CVehicle* v = me ? me->VehicleIfIn() : nullptr;
-            if (v && v->Driver() == me) {
+            if (v && v->Driver() == me && radio::RequestedStation() != radio::RADIO_USER_TRACKS) {
                 radio::TuneToUserTracks();
             }
         }
@@ -526,6 +526,9 @@ bool Hovered(float x, float y, float w, float h) {
 void SetMusicMenuVisible(bool visible) {
     if (visible == g_musicVisible) return;
     g_musicVisible = visible;
+    if (visible && music::Playlist().empty()) {
+        music::AutoScanUserTracks();
+    }
     if (visible && TheChat().IsOpen()) TheChat().Close();
     if (!visible && core::ConnectMenuVisible()) return;
     In().SetKeyboardCapture(visible);
@@ -784,17 +787,11 @@ public:
         g_hasPassengers.store(riderCount > 0);
         g_riderCount.store(riderCount);
 
-        // Auto-scan and auto-resume driver's track when tuning into USER TRACK PLAYER
+        // Auto-resume driver's track when tuning into USER TRACK PLAYER
         static bool s_wasDriverActive = false;
         if (driverActive && !s_wasDriverActive) {
-            if (music::Playlist().empty()) {
-                music::AutoScanUserTracks();
-            }
             std::lock_guard<std::mutex> lock(g_playerMx);
-            if (g_currentIndex < 0 && !g_playlist.empty()) {
-                lock.~lock_guard();
-                music::PlayTrack(0);
-            } else if (g_currentIndex >= 0 && !g_loadedTrack.pcm.empty() && !g_isPlaying.load()) {
+            if (g_currentIndex >= 0 && !g_loadedTrack.pcm.empty() && !g_isPlaying.load()) {
                 g_isPlaying = true;
                 g_isPaused = false;
                 g_driverFade = 0.0f;
