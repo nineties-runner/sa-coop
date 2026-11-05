@@ -250,7 +250,7 @@ void AudioThreadFunc() {
                     waveOutWrite(g_waveOut, &h, sizeof(h));
 
                     // Send audio frame to passengers if we are driver and streaming enabled
-                    if (g_streamToPassengers.load() && Net().Online() && g_hasPassengers.load()) {
+                    if (g_streamToPassengers.load() && Net().Online()) {
                         auto encL = adpcm::Encode(chanStreamL, kFrameSamplesPerChan, encStateL);
                         auto encR = adpcm::Encode(chanStreamR, kFrameSamplesPerChan, encStateR);
 
@@ -660,14 +660,31 @@ public:
             std::vector<uint8_t> dataR = r.Bytes(lenR);
 
             if (!r.Ok() || from == Net().MyId() || !core::IsPlayerReady()) return;
-            if (!radio::IsPassengerOnUserTracks()) return;
 
-            // Only play if we are in the same vehicle as the driver
+            // Only accept if we are in the same vehicle as the sender who is driving
             CPlayerPed* me = FindPlayerPed(0);
             CVehicle* v = me ? me->VehicleIfIn() : nullptr;
-            CPed* d = v ? v->Driver() : nullptr;
-            RemotePlayer* rp = d && d != me ? Players::Instance().FindByPed(d) : nullptr;
+            if (!v || v->Driver() == me || !radio::CarRadio()) return;
+
+            CPed* d = v->Driver();
+            const RemotePlayer* rp = d ? Players::Instance().FindByPed(d) : nullptr;
+            if (!rp) {
+                NetVehicle* nv = Vehicles::Instance().Find(v);
+                if (nv) {
+                    for (auto& [id, player] : Players::Instance().All()) {
+                        if (player.vehNetId == nv->netId && player.seat < 0) {
+                            rp = &player;
+                            break;
+                        }
+                    }
+                }
+            }
             if (!rp || rp->id != from) return; // not passenger of this sender
+
+            // Ensure passenger radio is tuned to USER TRACK PLAYER
+            if (radio::RequestedStation() != radio::RADIO_USER_TRACKS) {
+                radio::TuneToUserTracks();
+            }
 
             std::vector<int16_t> pcmL, pcmR;
             if (!adpcm::Decode(dataL.data(), dataL.size(), pcmL) || !adpcm::Decode(dataR.data(), dataR.size(), pcmR)) return;
@@ -695,7 +712,10 @@ public:
         }
 
         bool driverActive = radio::IsDriverOnUserTracks();
-        bool passengerActive = radio::IsPassengerOnUserTracks();
+        CPlayerPed* me = FindPlayerPed(0);
+        CVehicle* v = me ? me->VehicleIfIn() : nullptr;
+        bool isPassenger = v && v->Driver() && v->Driver() != me && radio::CarRadio();
+        bool passengerActive = isPassenger && (NowMs() - g_lastRecvMs < 2000);
         float gameVol = radio::GameRadioVolume();
 
         g_driverActive.store(driverActive);
