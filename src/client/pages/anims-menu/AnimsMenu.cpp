@@ -347,7 +347,7 @@ void ToggleAnimsMenu() {
 
     if (g_visible) return SetAnimsMenuVisible(false);
 
-    if (core::IsPlayerReady() && !game::MenuActive() && !core::ConnectMenuVisible()) {
+    if (game::IsForeground() && core::IsPlayerReady() && !game::MenuActive() && !core::ConnectMenuVisible()) {
 
         SetAnimsMenuVisible(true);
 

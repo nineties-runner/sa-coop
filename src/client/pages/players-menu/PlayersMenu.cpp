@@ -93,7 +93,7 @@ void TestGift(uint8_t to, const std::wstring& amount) {
 
 void TogglePlayersMenu() {
     if (g_visible) return SetPlayersMenuVisible(false);
-    if (Net().Online() && core::IsPlayerReady() && !game::MenuActive() && !core::ConnectMenuVisible()) SetPlayersMenuVisible(true);
+    if (game::IsForeground() && Net().Online() && core::IsPlayerReady() && !game::MenuActive() && !core::ConnectMenuVisible()) SetPlayersMenuVisible(true);
 }
 
 void RenderPlayersMenu() {

@@ -1,5 +1,8 @@
 #include "shared/game/Game.h"
 
+#include <windows.h>
+#undef GetObject
+
 #include <cstring>
 
 #include "common/lib/log/Log.h"
@@ -149,6 +152,17 @@ void LightArea(int area, const CVector& pos) {
     }
     if (sky) Call<0x55FEC0>(sky - 1, false);  // CTimeCycle::StartExtraColour
     else Call<0x55FF20>(false);              // CTimeCycle::StopExtraColour
+}
+
+
+bool IsForeground() {
+    HWND fg = GetForegroundWindow();
+    void* gw = GameWindow();
+    if (gw) {
+        if (!fg) return false;
+        return fg == (HWND)gw || GetAncestor(fg, GA_ROOT) == (HWND)gw || GetAncestor(fg, GA_ROOTOWNER) == (HWND)gw;
+    }
+    return Ref<uint8_t>(addr::ForegroundApp) != 0;
 }
 
 }  // namespace game

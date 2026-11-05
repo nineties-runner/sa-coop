@@ -465,6 +465,7 @@ bool TypingCheat(int vk) {
 }
 
 bool OnKeyDown(int vk, bool repeat) {
+    if (!game::IsForeground()) return false;
     auto& cfg = Cfg();
     bool typingCheat = !repeat && TypingCheat(vk);
     if (!repeat && vk >= 'A' && vk <= 'Z') g_lastLetterMs = NowMs();

@@ -418,7 +418,7 @@ inline int32_t GameState() { return Ref<int32_t>(addr::GameState); }
 inline bool MenuActive() { return Ref<uint8_t>(addr::MenuManager + 0x5C) != 0; }
 inline void* D3DDevice() { return Ref<void*>(addr::D3DDevice); }
 inline CPad* GetPad(int i) { return reinterpret_cast<CPad*>(addr::Pads) + i; }
-inline bool IsForeground() { return Ref<uint8_t>(addr::ForegroundApp) != 0; }
+bool IsForeground();
 
 // RsGlobal.ps->window (HWND). RsGlobal: appName(0) maximumWidth(4) maximumHeight(8) frameLimit(C)
 // quit(10) ps(14). PsGlobalType: window(0).

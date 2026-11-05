@@ -606,7 +606,10 @@ void SetMusicMenuVisible(bool visible) {
 bool IsMusicMenuVisible() { return g_musicVisible; }
 
 void ToggleMusicMenu() {
-    SetMusicMenuVisible(!g_musicVisible);
+    if (g_musicVisible) return SetMusicMenuVisible(false);
+    if (game::IsForeground() && core::IsPlayerReady() && !game::MenuActive() && !core::ConnectMenuVisible()) {
+        SetMusicMenuVisible(true);
+    }
 }
 
 void RenderMusicMenu() {

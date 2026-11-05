@@ -32,7 +32,7 @@ public:
         bool held = game::IsForeground() && (GetAsyncKeyState(Cfg().emoteKey) & 0x8000);
         bool pressed = held && !m_held;
         m_held = held;
-        bool usable = core::IsPlayerReady() && !game::MenuActive() && !ui::TheChat().IsOpen() &&
+        bool usable = game::IsForeground() && core::IsPlayerReady() && !game::MenuActive() && !ui::TheChat().IsOpen() &&
                       !core::ConnectMenuVisible() && !ui::In().KeyboardCaptured();
         if (!m_open) {
             if (!pressed || !usable) return;
