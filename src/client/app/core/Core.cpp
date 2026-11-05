@@ -17,6 +17,8 @@
 #include "features/story/contest/Contest.h"
 #include "features/story/missions/Missions.h"
 #include "features/teleport/Teleport.h"
+#include "features/updater/Updater.h"
+#include "pages/anims-menu/AnimsMenu.h"
 #include "pages/connect-menu/ConnectMenu.h"
 #include "pages/players-menu/PlayersMenu.h"
 #include "shared/api/net-session/Session.h"
@@ -131,6 +133,7 @@ void RenderOverlay() {
         for (auto* m : Modules()) m->OnRender();
     ui::TheChat().Render();
     ui::RenderOverlay();  // after the chat: the contest's board on top hides the ends of its longest lines
+    ui::RenderAnimsMenu();
     ui::RenderPlayersMenu();
     ui::RenderConnectMenu();
     g.End();
@@ -223,6 +226,46 @@ void HandleChatSubmit(const std::string& text) {
             Cfg().debugOverlay = !Cfg().debugOverlay;
             return;
         }
+        if (cmd == "update" || cmd == "checkupdate") {
+            if (!args.empty() && args[0] == "restart") {
+                if (updater::CurrentState() == updater::State::ReadyToRestart) {
+                    updater::ApplyAndRestart();
+                } else {
+                    ui::TheChat().AddError(TR("Обновление ещё не скачано.", "Update has not been downloaded yet."));
+                }
+            } else if (!args.empty() && args[0] == "download") {
+                if (updater::CurrentState() == updater::State::Available) {
+                    updater::StartDownload();
+                } else {
+                    ui::TheChat().AddError(TR("Нет доступного обновления для скачивания.", "No update available to download."));
+                }
+            } else {
+                if (updater::CurrentState() == updater::State::Available) {
+                    updater::StartDownload();
+                } else if (updater::CurrentState() == updater::State::ReadyToRestart) {
+                    updater::ApplyAndRestart();
+                } else {
+                    updater::CheckForUpdates(false);
+                }
+            }
+            return;
+        }
+        if (cmd == "fontsize" || cmd == "chatsize") {
+            if (args.empty()) {
+                ui::TheChat().AddSystem(Format(TR("Текущий размер чата: %.2f (от 0.5 до 2.0). Пример: /fontsize 1.3",
+                                                  "Current chat font size: %.2f (from 0.5 to 2.0). Example: /fontsize 1.3"),
+                                               Cfg().chatFontSize));
+            } else {
+                float sz = (float)atof(args[0].c_str());
+                if (sz <= 0.0f) {
+                    ui::TheChat().AddError(TR("Укажите число от 0.5 до 2.0. Пример: /fontsize 1.2",
+                                              "Specify a number from 0.5 to 2.0. Example: /fontsize 1.2"));
+                } else {
+                    ui::TheChat().SetFontSize(sz);
+                }
+            }
+            return;
+        }
         for (auto* m : Modules())
             if (m->OnCommand(cmd, args)) return;
         if (Net().Online()) Net().SendChat(text);
@@ -301,6 +344,8 @@ void WriteDefaultConfig(const std::wstring& path) {
         (ru ? "name = Игрок\r\n" : "name = Player\r\n") +
         "; Язык окна F9, чата и подсказок: ru или en. Переключается и в окне F9.\r\n"
         "language = " + (ru ? "ru" : "en") + "\r\n"
+        "; Скин (ID 0–311, 0 = CJ в своей одежде). Меняется в окне F9.\r\n"
+        "skin = 0\r\n"
         "\r\n"
         "[connect]\r\n"
         "; Поставьте 1, чтобы подключаться сразу при запуске игры, без окна F9.\r\n"
@@ -340,10 +385,11 @@ void WriteDefaultConfig(const std::wstring& path) {
         "proximity = 1\r\n"
         "\r\n"
         "[keys]\r\n"
-        "; Коды клавиш Windows: чат (84 = T), сесть пассажиром (71 = G), список игроков (113 = F2)\r\n"
+        "; Коды клавиш Windows: чат (84 = T), сесть пассажиром (71 = G), список игроков (113 = F2), эмоции (74 = J)\r\n"
         "chat = 84\r\n"
         "enter_as_passenger = 71\r\n"
         "player_list = 113\r\n"
+        "emote_wheel = 74\r\n"
         "\r\n"
         "[debug]\r\n"
         "; Отладочная информация на экране и подробный лог. Включайте, если вас попросили прислать лог.\r\n"
@@ -427,6 +473,10 @@ bool OnKeyDown(int vk, bool repeat) {
         }
         return true;  // the menu owns the keyboard while open
     }
+    if (ui::IsAnimsMenuVisible()) {
+        if ((vk == VK_ESCAPE || vk == VK_F3) && !repeat) ui::SetAnimsMenuVisible(false);
+        return true;
+    }
     if (ui::IsPlayersMenuVisible()) {
         if ((vk == VK_ESCAPE || vk == cfg.playerListKey) && !repeat) ui::SetPlayersMenuVisible(false);
         return true;  // its amount box takes the keys while it is open
@@ -437,6 +487,10 @@ bool OnKeyDown(int vk, bool repeat) {
     if ((vk == 'Y' || vk == 'N') && !game::MenuActive() && (contest::Key(vk) || teleport::Key(vk == 'Y') || SideCallKey(vk == 'Y')))
         return true;  // a call, a request
     if (vk == 'U' && !game::MenuActive() && !typingCheat && contest::Key(vk)) return true;  // a contest's challenge
+    if (vk == VK_F3 && IsPlayerReady()) {
+        ui::ToggleAnimsMenu();
+        return true;
+    }
     if (vk == VK_F9) {
         // a window that cannot be drawn would only take the mouse and the keys (#26)
         if (ui::Gfx().Failed()) {
@@ -687,6 +741,7 @@ void Init(void* hModule) {
     // the user files directory and the network stack are not ready inside DllMain
     g_pendingAutoConnect = cfg.autoConnect;
     LOGI("Initialisation complete");
+    updater::CheckForUpdates(true);
 }
 
 }  // namespace coop::core

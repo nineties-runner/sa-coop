@@ -21,6 +21,7 @@ public:
     // Feeds per-frame input while open. Returns true if the chat should close.
     void ProcessInput();
     void Render();
+    void SetFontSize(float scale);
 
     std::function<void(const std::string& utf8)> onSubmit;
 

@@ -928,6 +928,116 @@ bool Players::SetModel(CPlayerPed* ped, int model) {
     return true;
 }
 
+namespace {
+const char* MtaSpecialSkinName(int id) {
+    switch (id) {
+        case 1: return "TRUTH";
+        case 2: return "MACCER";
+        case 3: return "CDEPUT";
+        case 4: return "SFPDM1";
+        case 5: return "BB";
+        case 6: return "WFYCRP";
+        case 8: return "WMYCD2";
+        case 42: return "SUZIE";
+        case 65: return "VWMYAP";
+        case 86: return "VHFYST";
+        case 119: return "LVPDM1";
+        case 265: return "TENPEN";
+        case 266: return "PULASKI";
+        case 267: return "HERN";
+        case 268: return "DWAYNE";
+        case 269: return "SMOKE";
+        case 270: return "SWEET";
+        case 271: return "RYDER";
+        case 272: return "FORELLI";
+        case 273: return "MEDIATR";
+        case 289: return "SOMYAP";
+        case 290: return "ROSE";
+        case 291: return "PAUL";
+        case 292: return "CESAR";
+        case 293: return "OGLOC";
+        case 294: return "WUZIMU";
+        case 295: return "TORINO";
+        case 296: return "JIZZY";
+        case 297: return "MADDOGG";
+        case 298: return "CAT";
+        case 299: return "CLAUDE";
+        case 300: return "RYDER2";
+        case 301: return "RYDER3";
+        case 302: return "EMMET";
+        case 303: return "ANDRE";
+        case 304: return "KENDL";
+        case 305: return "JETHRO";
+        case 306: return "ZERO";
+        case 307: return "TBONE";
+        case 308: return "SINDACO";
+        case 309: return "JANITOR";
+        case 310: return "BBTHIN";
+        case 311: return "SMOKEV";
+        default: return nullptr;
+    }
+}
+}  // namespace
+
+bool Players::ValidSkinId(int id) {
+    if (id < 0 || id > 311 || id == 74 || id == 149 || id == 208) return false;
+    if (id == 0 || MtaSpecialSkinName(id)) return true;
+    return core::IsInGame() ? IsPedModel(id) : true;
+}
+
+int Players::StepSkinId(int id, int dir) {
+    int step = dir >= 0 ? 1 : -1;
+    int cur = std::clamp(id, 0, 311);
+    for (int i = 0; i < 312; ++i) {
+        cur = (cur + step + 312) % 312;
+        if (ValidSkinId(cur)) return cur;
+    }
+    return 0;
+}
+
+bool Players::SetLocalSkin(int id, std::string* errorOut) {
+    if (!ValidSkinId(id)) {
+        if (errorOut) *errorOut = TR("Укажите ID скина от 0 до 311 (кроме 74, 149, 208).", "Enter a skin ID from 0 to 311 (except 74, 149, 208).");
+        return false;
+    }
+    if (errorOut) errorOut->clear();
+    Cfg().skin = id;
+    Ini ini;
+    ini.Load(Cfg().iniPath);
+    ini.SetInt("player", "skin", id);
+    ini.Save(Cfg().iniPath);
+    if (core::IsPlayerReady()) {
+        if (CPlayerPed* me = FindPlayerPed(0)) ApplyLocalSkin(me);
+    }
+    return true;
+}
+
+void Players::ApplyLocalSkin(CPlayerPed* me) {
+    if (!me || me->InVehicle() || me->Health() <= 0.0f || EnteringCar(me) || Ref<uint8_t>(0xB5F851)) return;
+    int want = Cfg().skin;
+    if (!ValidSkinId(want)) want = 0;
+    if (want == 0) {
+        if (m_appliedSkinId != 0 && me->ModelIndex() == m_appliedSkinModel && me->ModelIndex() != 0) {
+            if (SetModel(me, 0)) Call<0x5A82C0>(me, false);  // CClothes::RebuildPlayer
+        }
+        m_appliedSkinId = 0;
+        m_appliedSkinModel = 0;
+        return;
+    }
+    if (m_appliedSkinId == want && me->ModelIndex() == m_appliedSkinModel && m_appliedSkinModel != 0) return;
+    int model = want;
+    if (const char* special = MtaSpecialSkinName(want)) {
+        model = Peds::Instance().SpecialModelFor(special);
+        if (model < 0) return;  // still loading into a free special slot (290..299)
+    }
+    if (SetModel(me, model)) {
+        if (model >= 290 && model <= 299) Peds::Instance().SpecialWorn(model);
+        m_appliedSkinId = want;
+        m_appliedSkinModel = model;
+        LOGI("Local player skin applied: ID %d (model %d)", want, model);
+    }
+}
+
 void Players::OnSessionStart() { m_lastSend = m_markSentMs = 0; }
 
 void Players::OnSessionEnd() {
@@ -1967,6 +2077,9 @@ void Players::SendLocalState() {
 }
 
 void Players::OnPostProcess() {
+    if (core::IsPlayerReady()) {
+        if (CPlayerPed* me = FindPlayerPed(0)) ApplyLocalSkin(me);
+    }
     if (!Net().Online() || !core::IsPlayerReady()) return;
     if (NowMs() - m_markSentMs > 15000) {  // again now and then: a player who came later or loaded a world has it too
         m_markSentMs = NowMs();
@@ -2156,6 +2269,28 @@ bool Players::OnCommand(const std::string& cmd, const std::vector<std::string>& 
         SetMarkColour(colour);
         ui::TheChat().AddSystem(colour.empty() ? TR("Ваша метка у напарника снова обычного цвета.", "Your mark has its usual colour for your partner again.")
                                                : Format(TR("Ваша метка у напарника теперь %s.", "Your mark is %s for your partner now."), colour.c_str()));
+        return true;
+    }
+    if (cmd == "skin") {
+        if (args.empty()) {
+            ui::TheChat().AddSystem(Format(TR("Ваш скин: ID %d. Сменить: /skin <0–311> или в окне F9.",
+                                              "Your skin: ID %d. Change it with /skin <0–311> or in the F9 window."),
+                                           Cfg().skin));
+            return true;
+        }
+        std::string arg = Trim(args[0]);
+        if (arg.find_first_not_of("0123456789") != std::string::npos) {
+            ui::TheChat().AddError(TR("Укажите ID скина от 0 до 311 (кроме 74, 149, 208).", "Enter a skin ID from 0 to 311 (except 74, 149, 208)."));
+            return true;
+        }
+        std::string err;
+        int id = atoi(arg.c_str());
+        if (!SetLocalSkin(id, &err)) {
+            ui::TheChat().AddError(err);
+        } else {
+            ui::TheChat().AddSystem(id == 0 ? TR("Установлен скин CJ (ID 0).", "Skin set to CJ (ID 0).")
+                                            : Format(TR("Установлен скин ID %d.", "Skin set to ID %d."), id));
+        }
         return true;
     }
     return false;  // /tp and /tphere: requests (Teleport.cpp), carried out here once the other player says yes

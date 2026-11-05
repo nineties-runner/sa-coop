@@ -84,6 +84,9 @@ public:
     RemotePlayer* Get(uint8_t id);
     // the copy's model as SET_PLAYER_MODEL changes a player's (0: CJ in his clothes); false if it cannot be loaded
     static bool SetModel(game::CPlayerPed* ped, int model);
+    static bool ValidSkinId(int id);
+    static int StepSkinId(int id, int dir);
+    bool SetLocalSkin(int id, std::string* errorOut = nullptr);
     const std::map<uint8_t, RemotePlayer>& All() const { return m_remote; }
     // our own mark in this colour on the other players' radar (BlipColour's names, empty: the allies' blue), saved in
     // coop.ini and sent to them
@@ -127,6 +130,7 @@ private:
     void YieldClaimedSeat(game::CPlayerPed* me);
     void PutAwayStuckPhone(game::CPlayerPed* me);
     void PassengerWeaponWheel(game::CPlayerPed* me);
+    void ApplyLocalSkin(game::CPlayerPed* me);
     void HandleOnFoot(uint8_t from, Reader& r);
     void HandleDriver(uint8_t from, Reader& r);
     void HandlePassenger(uint8_t from, Reader& r);
@@ -163,6 +167,8 @@ private:
     int m_rideCar = -1;             // the other player's car we ride in, by handle, and since when
     uint64_t m_rideSinceMs = 0;
     std::vector<int> m_riders;      // our followers we sent into it
+    int m_appliedSkinId = 0;
+    int m_appliedSkinModel = 0;
 };
 
 // helpers shared with other modules

@@ -127,6 +127,11 @@ RequestSpecialFn g_origRequestSpecial = nullptr;
 void MakeWay(int model, const char* name) {
     if (!name || !_stricmp(Peds::Instance().SpecialName(model).c_str(), name)) return;
     Peds::Instance().RespawnCopiesOf(model);
+    if (CPlayerPed* me = FindPlayerPed(0); me && me->ModelIndex() == model) {
+        Players::SetModel(me, 0);
+        Call<0x5A82C0>(me, false);  // CClothes::RebuildPlayer
+        LOGI("Our special character makes way for %s", name);
+    }
     for (auto& [id, other] : Players::Instance().All())
         if (RemotePlayer* rp = Players::Instance().Get(id); rp && rp->ped && rp->ped->ModelIndex() == model) {
             Players::SetModel(rp->ped, 0);

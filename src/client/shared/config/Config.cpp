@@ -36,6 +36,8 @@ bool ClientConfig::Load(const std::wstring& coopDirectory) {
     nickname = SanitizeNickname(ini.Get("player", "name", nickname));
     if (nickname.size() < 2) nickname = "Player";
     english = ToLower(ini.Get("player", "language", "ru")) == "en";  // configs made before the switch were Russian
+    int s = ini.GetInt("player", "skin", 0);
+    skin = s < 0 ? 0 : (s > 311 ? 311 : s);
 
     autoConnect = ini.GetBool("connect", "auto_connect", autoConnect);
     host = ini.Get("connect", "host", host);
@@ -78,6 +80,11 @@ bool ClientConfig::Load(const std::wstring& coopDirectory) {
     chatKey = ini.GetInt("keys", "chat", chatKey);
     passengerKey = ini.GetInt("keys", "enter_as_passenger", passengerKey);
     playerListKey = ini.GetInt("keys", "player_list", playerListKey);
+    emoteKey = ini.GetInt("keys", "emote_wheel", emoteKey);
+    chatFontSize = ini.GetFloat("game", "chat_font_size", chatFontSize);
+    if (chatFontSize < 0.5f) chatFontSize = 0.5f;
+    if (chatFontSize > 2.0f) chatFontSize = 2.0f;
+    updateUrl = ini.Get("game", "update_url", updateUrl);
 
     debugOverlay = ini.GetBool("debug", "overlay", debugOverlay);
     cleanScreen = ini.GetBool("debug", "clean_screen", cleanScreen);

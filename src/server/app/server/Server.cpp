@@ -396,7 +396,10 @@ void Server::HandleCommand(Player* p, const std::string& text) {
         if (admin || m_cfg.partnerTeleport)
             reply(kColorServer, "В игре: /tp (переместиться к напарнику), /tphere (позвать напарника к себе). Напарник отвечает Y или N",
                   "In the game: /tp (go to your partner), /tphere (bring your partner to you). Your partner answers Y or N");
-        reply(kColorServer, "F2: игроки, у кого сколько денег, перевод денег", "F2: the players, their money, giving money");
+        reply(kColorServer, "F2: игроки, перевод денег; F3: все анимации и колесо эмоций", "F2: players, give money; F3: all anims & emote wheel");
+        reply(kColorServer, "Чат: /fontsize <0.5-2.0> — размер шрифта; /update — проверить и установить обновление", "Chat: /fontsize <0.5-2.0> — chat font size");
+        reply(kColorServer, "Эмоции: удерживайте J или напишите /e (например, /e привет, /e танец, /e сидеть; остановить: /e стоп)",
+              "Emotes: hold J or type /e (for example, /e wave, /e dance, /e sit; to stop: /e stop)");
     } else if (cmd == "players" || cmd == "status") {
         for (auto& o : m_players) {
             if (!o.joined) continue;
@@ -434,7 +437,8 @@ void Server::HandleCommand(Player* p, const std::string& text) {
         SendChat(nullptr, kServerId, kColorServer, "[Сервер] " + rest, "[Server] " + rest);
     } else if (cmd == "quit" && !p) {
         Stop();
-    } else if (cmd == "tp" || cmd == "tphere" || cmd == "voice" || cmd == "save" || cmd == "skin") {
+    } else if (cmd == "tp" || cmd == "tphere" || cmd == "voice" || cmd == "save" || cmd == "skin" || cmd == "update" || cmd == "checkupdate" || cmd == "fontsize" || cmd == "chatsize" || cmd == "e" ||
+               cmd == "emote" || cmd == "emotes") {
         // handled by the game client locally; nothing to do on the server
     } else {
         reply(kColorError, "Такой команды нет. Чтобы увидеть список команд, напишите /help.",

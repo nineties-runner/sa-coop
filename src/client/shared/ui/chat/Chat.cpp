@@ -6,6 +6,7 @@
 
 #include "common/lib/log/Log.h"
 #include "common/lib/util/Util.h"
+#include "common/lib/ini/Ini.h"
 #include "shared/config/Config.h"
 #include "shared/ui/input/Input.h"
 #include "shared/ui/renderer/Renderer.h"
@@ -153,13 +154,28 @@ void Chat::ProcessInput() {
     }
 }
 
+void Chat::SetFontSize(float scale) {
+    if (scale < 0.5f) scale = 0.5f;
+    if (scale > 2.0f) scale = 2.0f;
+    Cfg().chatFontSize = scale;
+    Ini ini;
+    ini.Load(Cfg().iniPath);
+    ini.Set("game", "chat_font_size", std::to_string(scale));
+    ini.Save(Cfg().iniPath);
+    AddSystem(Format(TR("Размер текста чата установлен: %.2f", "Chat font size set to: %.2f"), scale));
+}
+
 void Chat::Render() {
     auto& g = Gfx();
     if (!g.Ready()) return;
     float s = g.Scale();
     float x = 24 * s, y = 24 * s;
-    float width = std::max(520.0f * s, g.Width() * 0.36f);
-    float lh = g.LineHeight(FONT_NORMAL) * 0.95f;
+    float fontScale = Cfg().chatFontSize;
+    if (fontScale < 0.5f) fontScale = 0.5f;
+    if (fontScale > 2.0f) fontScale = 2.0f;
+    FontId font = (fontScale >= 1.25f) ? FONT_BIG : ((fontScale <= 0.85f) ? FONT_SMALL : FONT_NORMAL);
+    float width = std::max(520.0f * s * fontScale, g.Width() * 0.36f * fontScale);
+    float lh = g.LineHeight(font) * 0.95f;
     uint64_t now = NowMs();
 
     // collect wrapped lines from the end
@@ -177,7 +193,7 @@ void Chat::Render() {
             if (age > kFadeAfterMs + 2000) break;
             if (age > kFadeAfterMs) alpha = 1.0f - (float)(age - kFadeAfterMs) / 2000.0f;
         }
-        auto wrapped = g.Wrap(FONT_NORMAL, it->text, width);
+        auto wrapped = g.Wrap(font, it->text, width);
         for (auto w = wrapped.rbegin(); w != wrapped.rend() && (int)vis.size() < kVisibleLines; ++w) {
             if (skip > 0) {
                 --skip;
@@ -191,7 +207,7 @@ void Chat::Render() {
     }
     float cy = y + lh * (kVisibleLines - 1);
     for (auto& v : vis) {
-        g.TextW(FONT_NORMAL, x, cy, v.text, WithAlpha(v.color, v.alpha), TEXT_OUTLINE);
+        g.TextW(font, x, cy, v.text, WithAlpha(v.color, v.alpha), TEXT_OUTLINE);
         cy -= lh;
     }
     if (m_open) {
@@ -201,11 +217,11 @@ void Chat::Render() {
         g.RectOutline(x - 8 * s, iy, width + 16 * s, ih, 0xFF5A82C8);
         const wchar_t* prefix = TR(L"Сказать: ", L"Say: ");
         std::wstring shown = prefix + m_input;
-        float prefixW = g.TextWidthW(FONT_NORMAL, prefix);
+        float prefixW = g.TextWidthW(font, prefix);
         // scroll the input horizontally if it is too long
-        float caretX = prefixW + g.TextWidthW(FONT_NORMAL, std::wstring_view(m_input).substr(0, m_cursor));
+        float caretX = prefixW + g.TextWidthW(font, std::wstring_view(m_input).substr(0, m_cursor));
         float offset = std::max(0.0f, caretX - width + 10 * s);
-        g.TextW(FONT_NORMAL, x - offset, iy + 4 * s, shown, 0xFFFFFFFF, TEXT_SHADOW);
+        g.TextW(font, x - offset, iy + 4 * s, shown, 0xFFFFFFFF, TEXT_SHADOW);
         if (((now - m_openTime) / 500) % 2 == 0) g.Rect(x - offset + caretX, iy + 5 * s, 2 * s, lh - 2 * s, 0xFFFFFFFF);
         if (m_scroll > 0)
             g.Text(FONT_SMALL, x + width, y - 4 * s, Format("▲ %d", m_scroll), 0xFFB0B0B0, TEXT_RIGHT | TEXT_SHADOW);

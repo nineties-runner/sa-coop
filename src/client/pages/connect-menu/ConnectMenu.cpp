@@ -10,6 +10,7 @@
 #include "entities/player/Players.h"
 #include "entities/session/Flow.h"
 #include "shared/api/net-session/Session.h"
+#include "features/updater/Updater.h"
 #include "shared/config/Config.h"
 #include "shared/game/Game.h"
 #include "shared/lib/core/Core.h"
@@ -28,7 +29,7 @@ constexpr uint32_t kGold = 0xFFE2C063;  // the game's mission-title cream
 bool g_visible = false;
 bool g_autoShown = false;
 int g_tab = 0;  // 0 "connect", 1 "create"
-std::wstring g_nick, g_addr, g_port, g_password;
+std::wstring g_nick, g_addr, g_port, g_password, g_skin;
 std::string g_formError;
 int g_slotIndex = 0;  // index into the slot list
 std::vector<flow::SaveSlotInfo> g_slots;
@@ -65,6 +66,7 @@ void LoadFields() {
     g_addr = Widen(cfg.host);
     g_port = std::to_wstring(cfg.port);
     g_password = Widen(cfg.password);
+    g_skin = std::to_wstring(cfg.skin);
     g_tab = cfg.wantsHost ? 1 : 0;
     g_formError.clear();
     RefreshSlots();
@@ -89,6 +91,29 @@ bool ApplyNick() {
     Cfg().nickname = nick;
     g_nick = Widen(nick);
     return true;
+}
+
+bool ApplySkin() {
+    std::string raw = Trim(Narrow(g_skin));
+    int id = raw.empty() ? 0 : atoi(raw.c_str());
+    std::string err;
+    if (!Players::Instance().SetLocalSkin(id, &err)) {
+        g_formError = err;
+        w::SetFocus("skin");
+        return false;
+    }
+    g_formError.clear();
+    g_skin = std::to_wstring(Cfg().skin);
+    return true;
+}
+
+void StepSkin(int dir) {
+    int next = Players::StepSkinId(Cfg().skin, dir);
+    std::string err;
+    if (Players::Instance().SetLocalSkin(next, &err)) {
+        g_formError.clear();
+        g_skin = std::to_wstring(Cfg().skin);
+    }
 }
 
 uint16_t PortValue() {
@@ -149,7 +174,25 @@ void RenderConnectMenu() {
     w::BeginFrame();
     float cy = w::Panel(x, y, W, H, "SA:COOP") + 8 * s;
     float vx = x + W - 52 * s;
-    g.Text(FONT_MENU_SMALL, vx, y + 36 * s, "v" COOP_VERSION_STR, kSaSlate, TEXT_RIGHT);
+    auto upState = updater::CurrentState();
+    if (upState == updater::State::Available) {
+        std::string upLabel = Format(TR("Обновить до %s", "Update to %s"), updater::LatestVersion().c_str());
+        float uw = g.TextWidth(FONT_SMALL, upLabel);
+        if (w::Button("btn_up_dl", vx - uw, y + 32 * s, uw + 16 * s, ch + 8 * s, upLabel, true, true, false)) {
+            updater::StartDownload();
+        }
+    } else if (upState == updater::State::Downloading) {
+        std::string pLabel = Format("%s %d%%", TR("Скачивание", "Downloading"), updater::DownloadProgress());
+        g.Text(FONT_SMALL, vx, y + 36 * s, pLabel, kSaGreen, TEXT_RIGHT);
+    } else if (upState == updater::State::ReadyToRestart) {
+        std::string rLabel = TR("Перезапустить сейчас", "Restart to update");
+        float rw = g.TextWidth(FONT_SMALL, rLabel);
+        if (w::Button("btn_up_rst", vx - rw, y + 32 * s, rw + 16 * s, ch + 8 * s, rLabel, true, true, false)) {
+            updater::ApplyAndRestart();
+        }
+    } else {
+        g.Text(FONT_MENU_SMALL, vx, y + 36 * s, "v" COOP_VERSION_STR, kSaSlate, TEXT_RIGHT);
+    }
     // the language switch left of the version, the pointer at the active one; the choice is saved at once
     float lx = vx - g.TextWidth(FONT_MENU_SMALL, "v" COOP_VERSION_STR) - 34 * s;
     for (int en = 1; en >= 0; --en) {
@@ -228,10 +271,31 @@ void RenderConnectMenu() {
             while (i < 5 && Cfg().markColour != kColours[i]) ++i;  // 5: a colour of one's own (RRGGBB)
             cy += 18 * s;
             caption(cx, TR("Цвет вашей метки у напарника", "Your mark's colour for your partner"));
+            caption(cx + 380 * s, TR("Скин (ID 0–311)", "Skin (ID 0–311)"));
             cy += ch + 6 * s;
             if (int d = w::Selector("blip", cx, cy, 360 * s, rowH, i < 5 ? names[i] : Cfg().markColour))
                 Players::Instance().SetMarkColour(kColours[((i < 5 ? i : 0) + d + 5) % 5]);
+            float sx = cx + 380 * s;
+            if (int d = w::Selector("skin_sel", sx, cy, 120 * s, rowH, Cfg().skin == 0 ? "0 (CJ)" : std::to_string(Cfg().skin)))
+                StepSkin(d);
+            bool skinEnter = w::TextBox("skin", sx + 128 * s, cy, 80 * s, rowH, g_skin, 3, false, true, "0");
+            const char* applyLabel = TR("Применить", "Apply");
+            if (skinEnter || item("skin_ok", sx + 216 * s + room, cy, applyLabel)) ApplySkin();
             cy += rowH;
+        } else {
+            cy += 18 * s;
+            caption(cx, TR("Скин (ID 0–311)", "Skin (ID 0–311)"));
+            cy += ch + 6 * s;
+            if (int d = w::Selector("skin_sel", cx, cy, 140 * s, rowH, Cfg().skin == 0 ? "0 (CJ)" : std::to_string(Cfg().skin)))
+                StepSkin(d);
+            bool skinEnter = w::TextBox("skin", cx + 148 * s, cy, 90 * s, rowH, g_skin, 3, false, true, "0");
+            const char* applyLabel = TR("Применить", "Apply");
+            if (skinEnter || item("skin_ok", cx + 246 * s + room, cy, applyLabel)) ApplySkin();
+            cy += rowH;
+        }
+        if (!g_formError.empty()) {
+            cy += 8 * s;
+            para(g_formError, kSaRed, FONT_NORMAL, true);
         }
     } else if (busy) {
         // ---- connecting / starting / loading, in the middle of the body
@@ -274,8 +338,15 @@ void RenderConnectMenu() {
         cy += 16 * s;
 
         caption(cx, TR("Ник", "Nickname"));
+        caption(cx + 340 * s, TR("Скин (ID 0–311)", "Skin (ID 0–311)"));
         cy += ch + 6 * s;
         bool enter = w::TextBox("nick", cx, cy, 320 * s, rowH, g_nick, 20);
+        float sx = cx + 340 * s;
+        if (int d = w::Selector("skin_sel", sx, cy, 130 * s, rowH, Cfg().skin == 0 ? "0 (CJ)" : std::to_string(Cfg().skin)))
+            StepSkin(d);
+        bool skinEnter = w::TextBox("skin", sx + 138 * s, cy, 85 * s, rowH, g_skin, 3, false, true, "0");
+        const char* applyLabel = TR("Применить", "Apply");
+        if (skinEnter || item("skin_ok", sx + 231 * s + room, cy, applyLabel)) ApplySkin();
         cy += rowH + 14 * s;
 
         int hostSlot = 0;
@@ -324,7 +395,7 @@ void RenderConnectMenu() {
         if ((w::Button("go", cx, cy, cw, bh + 10 * s, g_tab == 0 ? TR("Подключиться", "Connect") : TR("Создать сервер", "Start the server"),
                        can, true, true) ||
              (enter && can)) &&
-            ApplyNick()) {
+            ApplyNick() && ApplySkin()) {
             if (g_tab == 0) flow::Join(Trim(Narrow(g_addr)), PortValue(), Narrow(g_password));
             else flow::Host(inGame ? 0 : hostSlot, PortValue(), Narrow(g_password));
         }

@@ -1,0 +1,287 @@
+#include "pages/anims-menu/AnimsMenu.h"
+
+#include <windows.h>
+
+#include <algorithm>
+#include <string>
+#include <vector>
+
+#include "common/lib/util/Util.h"
+#include "features/anims/Emotes.h"
+#include "shared/config/Config.h"
+#include "shared/game/Game.h"
+#include "shared/lib/core/Core.h"
+#include "shared/ui/chat/Chat.h"
+#include "shared/ui/input/Input.h"
+#include "shared/ui/renderer/Renderer.h"
+#include "shared/ui/widgets/Widgets.h"
+
+namespace coop::ui {
+
+namespace {
+using w::kSaBlue, w::kSaMuted, w::kSaGreen, w::kSaRed, w::kSaLine;
+constexpr uint32_t kText = 0xFFE6E9EF;
+
+bool g_visible = false;
+std::wstring g_search;
+std::wstring g_lastSearch;
+std::vector<int> g_filtered;
+int g_scroll = 0;
+int g_selected = -1;       // index into g_filtered
+int g_assignSlot = -1;     // 0..9 if assigning to slot, or -1
+bool g_looped = true;
+std::string g_statusMsg;
+uint64_t g_statusUntil = 0;
+
+void Status(const std::string& msg) {
+    g_statusMsg = msg;
+    g_statusUntil = NowMs() + 4000;
+}
+
+std::wstring ToLowerW(const std::wstring& s) {
+    std::wstring out = s;
+    if (!out.empty()) CharLowerBuffW(out.data(), (DWORD)out.size());
+    return out;
+}
+
+void UpdateFilter() {
+    g_filtered.clear();
+    std::string qUtf8 = ToLower(Trim(WideToUtf8(g_search)));
+    int total = emotes::AllAnimsCount();
+    if (qUtf8.empty()) {
+        g_filtered.resize(total);
+        for (int i = 0; i < total; ++i) g_filtered[i] = i;
+    } else {
+        for (int i = 0; i < total; ++i) {
+            const char* block = nullptr;
+            const char* anim = nullptr;
+            emotes::GetAllAnim(i, block, anim);
+            std::string combined = ToLower(std::string(block) + " " + anim);
+            if (combined.find(qUtf8) != std::string::npos) {
+                g_filtered.push_back(i);
+            }
+        }
+    }
+    g_scroll = 0;
+    if (g_selected >= (int)g_filtered.size()) g_selected = g_filtered.empty() ? -1 : 0;
+}
+
+bool Hovered(float x, float y, float w, float h) {
+    auto& st = In().State();
+    return st.mouseX >= x && st.mouseX < x + w && st.mouseY >= y && st.mouseY < y + h;
+}
+}  // namespace
+
+void SetAnimsMenuVisible(bool visible) {
+    if (visible == g_visible) return;
+    g_visible = visible;
+    g_assignSlot = -1;
+    if (visible) {
+        if (TheChat().IsOpen()) TheChat().Close();
+        UpdateFilter();
+    }
+    if (!visible && core::ConnectMenuVisible()) return;
+    In().SetKeyboardCapture(visible);
+    In().SetMouseCapture(visible);
+}
+
+bool IsAnimsMenuVisible() { return g_visible; }
+
+void ToggleAnimsMenu() {
+    if (g_visible) return SetAnimsMenuVisible(false);
+    if (core::IsPlayerReady() && !game::MenuActive() && !core::ConnectMenuVisible()) {
+        SetAnimsMenuVisible(true);
+    }
+}
+
+void RenderAnimsMenu() {
+    if (!g_visible) return;
+    if (!core::IsPlayerReady() || game::MenuActive() || core::ConnectMenuVisible()) {
+        return SetAnimsMenuVisible(false);
+    }
+
+    if (g_search != g_lastSearch) {
+        g_lastSearch = g_search;
+        UpdateFilter();
+    }
+
+    auto& g = Gfx();
+    float s = g.Scale();
+    float lh = g.LineHeight(FONT_NORMAL), sh = g.LineHeight(FONT_SMALL), mh = g.LineHeight(FONT_MENU);
+
+    float W = std::min(860 * s, g.Width() - 32 * s);
+    float H = std::min(600 * s, g.Height() - 32 * s);
+    float x = (g.Width() - W) * 0.5f, y = (g.Height() - H) * 0.5f;
+    float pad = 20 * s;
+    float cx = x + pad, cy = y + 20 * s, cw = W - 2 * pad;
+
+    w::BeginFrame();
+    g.Rect(x, y, W, H, 0xF0000000);
+    g.RectOutline(x, y, W, H, kSaLine, std::max(1.0f, s));
+
+    // Title
+    g.Text(FONT_MENU, cx, cy, TR("Анимации и Колесо Эмоций", "Animations & Emote Wheel"), kSaBlue, TEXT_SHADOW);
+    std::string countStr = Format(TR("Найдено: %d / %d", "Found: %d / %d"), (int)g_filtered.size(), emotes::AllAnimsCount());
+    g.Text(FONT_SMALL, cx + cw, cy + (mh - sh) * 0.5f, countStr, kSaMuted, TEXT_RIGHT | TEXT_SHADOW);
+    cy += mh + 12 * s;
+
+    // Search bar & Looped checkbox
+    float searchW = cw * 0.65f;
+    float rowH = lh + 10 * s;
+    w::TextBox("anim_search", cx, cy, searchW, rowH, g_search, 40, false, false, TR("Поиск (блок или имя анимации)...", "Search (block or animation name)..."));
+
+    float chkX = cx + searchW + 16 * s;
+    w::Checkbox("anim_looped", chkX, cy + (rowH - lh) * 0.5f, TR("Зацикленно", "Looped"), g_looped);
+    cy += rowH + 12 * s;
+
+    // List area & Side panel (Wheel slots)
+    float sideW = 260 * s;
+    float listW = cw - sideW - 16 * s;
+    float listH = H - (cy - y) - 48 * s;
+
+    // --- DRAW ANIMATION LIST ---
+    g.Rect(cx, cy, listW, listH, 0xFF090C10);
+    g.RectOutline(cx, cy, listW, listH, kSaLine, std::max(1.0f, s));
+
+    float itemH = lh + 6 * s;
+    int visibleCount = (int)(listH / itemH);
+
+    // Mouse wheel scrolling
+    if (Hovered(cx, cy, listW, listH)) {
+        if (In().State().wheel > 0) g_scroll = std::max(0, g_scroll - 3);
+        else if (In().State().wheel < 0) g_scroll = std::max(0, std::min((int)g_filtered.size() - visibleCount, g_scroll + 3));
+    }
+    if (g_scroll > (int)g_filtered.size() - visibleCount) g_scroll = std::max(0, (int)g_filtered.size() - visibleCount);
+
+    float itemY = cy;
+    for (int k = 0; k < visibleCount && (g_scroll + k) < (int)g_filtered.size(); ++k) {
+        int idx = g_filtered[g_scroll + k];
+        const char* block = nullptr;
+        const char* anim = nullptr;
+        emotes::GetAllAnim(idx, block, anim);
+
+        bool isSel = (g_selected == g_scroll + k);
+        bool hover = Hovered(cx, itemY, listW, itemH);
+
+        if (isSel) g.Rect(cx, itemY, listW, itemH, 0xE026303B);
+        else if (hover) g.Rect(cx, itemY, listW, itemH, 0x8016202A);
+
+        if (hover && In().State().lmbPressed) {
+            g_selected = g_scroll + k;
+        }
+
+        std::string bStr = block;
+        std::string aStr = anim;
+        g.Text(FONT_NORMAL, cx + 8 * s, itemY + 3 * s, aStr, isSel ? kSaBlue : (hover ? 0xFFFFFFFF : kText), TEXT_SHADOW);
+        g.Text(FONT_SMALL, cx + listW - 8 * s, itemY + 4 * s, bStr, kSaMuted, TEXT_RIGHT | TEXT_SHADOW);
+
+        itemY += itemH;
+    }
+
+    // Scrollbar indicator
+    if ((int)g_filtered.size() > visibleCount && visibleCount > 0) {
+        float barH = std::max(12 * s, listH * visibleCount / (float)g_filtered.size());
+        float barY = cy + (listH - barH) * (g_scroll / (float)(g_filtered.size() - visibleCount));
+        g.Rect(cx + listW - 4 * s, barY, 4 * s, barH, kSaMuted);
+    }
+
+    // --- DRAW SIDE PANEL (WHEEL SLOTS & ACTIONS) ---
+    float spX = cx + listW + 16 * s;
+    float spY = cy;
+
+    g.Text(FONT_MENU_SMALL, spX, spY, TR("Колесо (10 слотов)", "Wheel (10 slots)"), kSaBlue, TEXT_SHADOW);
+    spY += sh + 6 * s;
+
+    const auto& slots = emotes::WheelSlots();
+    float slotRowH = std::max(24 * s, (listH - 80 * s) / 10.0f);
+    for (int i = 0; i < emotes::kWheelSlots && i < (int)slots.size(); ++i) {
+        bool hover = Hovered(spX, spY, sideW, slotRowH);
+        bool isAssigning = (g_assignSlot == i);
+
+        g.Rect(spX, spY, sideW, slotRowH, isAssigning ? 0xC04A5A6B : (hover ? 0xFF16202A : 0xFF0C1117));
+        g.RectOutline(spX, spY, sideW, slotRowH, isAssigning ? kSaBlue : (hover ? kSaBlue : kSaLine), std::max(1.0f, s));
+
+        std::string slotLabel = Format("%d: %s", (i + 1) % 10, slots[i].name.c_str());
+        g.Text(FONT_SMALL, spX + 6 * s, spY + (slotRowH - sh) * 0.5f, slotLabel, isAssigning ? kSaBlue : (hover ? 0xFFFFFFFF : kText));
+
+        if (hover && In().State().lmbPressed) {
+            if (g_selected >= 0 && g_selected < (int)g_filtered.size()) {
+                const char* b = nullptr;
+                const char* a = nullptr;
+                emotes::GetAllAnim(g_filtered[g_selected], b, a);
+                emotes::SetWheelSlot(i, a, b, a, g_looped);
+                Status(Format(TR("Слот %d: установлен %s", "Slot %d: set to %s"), (i + 1) % 10, a));
+                g_assignSlot = -1;
+            } else {
+                g_assignSlot = (g_assignSlot == i) ? -1 : i;
+            }
+        }
+
+        spY += slotRowH + 2 * s;
+    }
+
+    spY += 4 * s;
+    // Play selected button
+    std::string playLabel = TR("Проиграть (Enter)", "Play (Enter)");
+    bool canPlay = (g_selected >= 0 && g_selected < (int)g_filtered.size());
+    if (w::Button("btn_play", spX, spY, sideW, rowH, playLabel, canPlay, canPlay)) {
+        if (canPlay) {
+            const char* b = nullptr;
+            const char* a = nullptr;
+            emotes::GetAllAnim(g_filtered[g_selected], b, a);
+            emotes::PlayRaw(b, a, g_looped);
+            Status(Format(TR("Играет: %s/%s", "Playing: %s/%s"), b, a));
+        }
+    }
+    spY += rowH + 4 * s;
+
+    // Reset wheel button
+    std::string resetLabel = TR("Сбросить колесо", "Reset wheel");
+    if (w::Button("btn_reset", spX, spY, sideW, rowH, resetLabel)) {
+        emotes::ResetWheelSlots();
+        Status(TR("Колесо сброшено по умолчанию", "Wheel reset to default"));
+    }
+
+    // Enter key plays selected
+    for (int vk : In().State().keyDowns) {
+        if (vk == VK_RETURN && canPlay) {
+            const char* b = nullptr;
+            const char* a = nullptr;
+            emotes::GetAllAnim(g_filtered[g_selected], b, a);
+            emotes::PlayRaw(b, a, g_looped);
+            Status(Format(TR("Играет: %s/%s", "Playing: %s/%s"), b, a));
+        } else if (vk == VK_UP) {
+            if (g_selected > 0) {
+                --g_selected;
+                if (g_selected < g_scroll) g_scroll = g_selected;
+            }
+        } else if (vk == VK_DOWN) {
+            if (g_selected + 1 < (int)g_filtered.size()) {
+                ++g_selected;
+                if (g_selected >= g_scroll + visibleCount) g_scroll = g_selected - visibleCount + 1;
+            }
+        }
+    }
+
+    // Bottom bar: Status & Close button
+    float by = y + H - 36 * s;
+    if (NowMs() < g_statusUntil && !g_statusMsg.empty()) {
+        g.Text(FONT_SMALL, cx, by + 6 * s, g_statusMsg, kSaGreen, TEXT_SHADOW);
+    } else {
+        std::string hint = TR("Стрелки / мышь: выбор анимации. Клик по слоту колеса справа назначает анимацию.",
+                              "Arrows / mouse: select anim. Click slot on right to assign.");
+        g.Text(FONT_SMALL, cx, by + 6 * s, hint, kSaMuted, TEXT_SHADOW);
+    }
+
+    const char* close = TR("Закрыть (F3)", "Close (F3)");
+    float room = mh * 1.6f;
+    float closeX = cx + cw - g.TextWidth(FONT_MENU, close);
+    bool closing = w::Button("btn_close", closeX - room, by, g.TextWidth(FONT_MENU, close) + 2 * room, rowH, close);
+
+    w::EndFrame();
+    w::DrawCursor();
+
+    if (closing) SetAnimsMenuVisible(false);
+}
+
+}  // namespace coop::ui

@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 CLIENT = Path(__file__).resolve().parent.parent / "src" / "client"
-ALLOWED = {"TR", "LOGI", "LOGW", "LOGE", "LOGD"}
+ALLOWED = {"TR", "TR_BOTH", "LOGI", "LOGW", "LOGE", "LOGD"}
 RUSSIAN = re.compile("[А-Яа-яЁё]")
 TOKEN = re.compile(r'//[^\n]*|/\*.*?\*/|L?"(?:[^"\\\n]|\\.)*"|\'(?:[^\'\\\n]|\\.)*\'|[(){}]|[A-Za-z_]\w*', re.S)
 

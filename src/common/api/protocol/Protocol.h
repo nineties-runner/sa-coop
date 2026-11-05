@@ -229,6 +229,9 @@ enum MsgId : uint8_t {
                               // partner's own look: u8 n, n x (u8 key index 0..27 of CPedClothesDesc, u32 key); 0: off
     G_OBJ_HOLD = 163,         // reliable: the partner holds the copy of a host's mission object: u8 op (1 hold, 2 release,
                               // 3 enter pressed, 4 deny: host -> partner), u16 object, release: vec3 pos, quat rot
+    G_RADIO = 178,            // reliable, from a driver with players in its car: u16 vehicle, i8 station, u8 n,
+                              // n x {i32 track, i8 type, i8 index} queued, u8 track flags, i32 ms into the first, i32 its
+                              // length (no tracks: the radio off or the User Track Player)
 
     G_VOICE = 200,            // unreliable: voice frame
     G_LAST = 255,

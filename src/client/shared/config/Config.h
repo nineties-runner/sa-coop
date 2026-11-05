@@ -8,6 +8,7 @@ struct ClientConfig {
     // [player]
     std::string nickname = "Player";
     bool english = false;             // language = en: the interface in English instead of Russian
+    int skin = 0;                     // character model ID (0 = CJ in his clothes)
 
     // [connect]
     bool autoConnect = false;  // the F9 menu by default; launchers and test setups switch it on
@@ -53,6 +54,9 @@ struct ClientConfig {
     int chatKey = 0x54;               // T
     int passengerKey = 0x47;          // G
     int playerListKey = 0x71;         // F2
+    int emoteKey = 0x4A;              // J, the emote wheel while held
+    float chatFontSize = 1.0f;        // /fontsize scale multiplier (0.5 .. 2.0)
+    std::string updateUrl = "";      // custom update metadata URL (empty = default Cloudflare R2)
 
     // [debug]
     bool debugOverlay = false;
@@ -75,3 +79,5 @@ ClientConfig& Cfg();
 
 // A text of the interface in both languages, where it is used: TR("Подключиться", "Connect").
 #define TR(ru, en) (::coop::Cfg().english ? (en) : (ru))
+// Both texts at once, where either language is taken (the names of an emote in /e): {TR_BOTH("танец", "dance")}.
+#define TR_BOTH(ru, en) ru, en
