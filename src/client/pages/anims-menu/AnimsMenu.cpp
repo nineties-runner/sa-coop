@@ -75,6 +75,7 @@ std::string g_previewAnim;
 bool g_previewLooped = true;
 
 uint64_t g_previewSince = 0;
+bool g_previewStarted = false;  // the animation was given to the ped: re-giving it every frame froze it on frame 0
 
 void DestroyPreviewPed() {
 
@@ -100,6 +101,8 @@ void UpdatePreviewPedAnim() {
         game::RequestModel(game::anim::kIfpBase + blockIdx, 2);
         if (NowMs() - g_previewSince < 5000) return;
     }
+    if (g_previewStarted) return;
+    g_previewStarted = true;
     game::script::Cmd(0x0792).I(g_previewPedHandle).Run();  // CLEAR_CHAR_TASKS_IMMEDIATELY
     game::script::Cmd(0x0605).I(g_previewPedHandle).S(g_previewAnim.c_str()).S(g_previewBlock.c_str()).F(4.0f).I(g_previewLooped ? 1 : 0).I(0).I(0).I(0).I(-1).Run();  // TASK_PLAY_ANIM
 }
@@ -114,6 +117,7 @@ void PlayPreviewAnim(const char* block, const char* anim, bool loop) {
     g_previewLooped = loop;
 
     g_previewSince = NowMs();
+    g_previewStarted = false;
 
     UpdatePreviewPedAnim();
 
@@ -169,20 +173,23 @@ void SetupPreviewCamera() {
 
         game::script::Cmd(0x0173).I(g_previewPedHandle).F(rotH * 57.29578f).Run();
 
-        float dist = 2.4f;
+        float dist = 4.2f;
 
         float camX = g_previewPos.x - std::sin(g_previewHeading) * dist;
 
         float camY = g_previewPos.y + std::cos(g_previewHeading) * dist;
 
-        float camZ = g_previewPos.z + 0.35f;
+        float camZ = g_previewPos.z + 0.2f;
 
         float lookX = g_previewPos.x;
 
         float lookY = g_previewPos.y;
 
-        float lookZ = g_previewPos.z + 0.1f;
+        float lookZ = g_previewPos.z;
 
+        // slide the view left so the ped sits in the right-hand preview window, not behind the list
+        float sx = std::cos(g_previewHeading) * 1.6f, sy = std::sin(g_previewHeading) * 1.6f;
+        camX += sx, lookX += sx, camY += sy, lookY += sy;
         game::CVector src{camX, camY, camZ}, look{lookX, lookY, lookZ};
         if (!g_camAttached) {  // opcodes once (as Pool): repeating CAMERA_RESET_NEW_SCRIPTABLES each frame blanked the camera to 0,0,0
             game::script::Cmd(0x015F).F(camX).F(camY).F(camZ).F(0.0f).F(0.0f).F(0.0f).Run();  // SET_FIXED_CAMERA_POSITION
