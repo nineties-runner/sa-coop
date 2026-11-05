@@ -22,7 +22,7 @@ namespace coop::updater {
 namespace {
 
 // Default update check URL (can be customized via coop.ini [game] update_url)
-constexpr const char* kDefaultUpdateUrl = "https://api.github.com/repos/nineties-runner/sa-coop/releases/latest";
+constexpr const char* kDefaultUpdateUrl = "https://raw.githubusercontent.com/nineties-runner/sa-coop/refs/heads/main/version.json";
 
 std::atomic<State> g_state{State::Idle};
 std::string g_latestVersion;
