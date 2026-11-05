@@ -157,7 +157,8 @@ void CheckForUpdates(bool silent) {
     std::thread([silent]() {
         std::string url = Cfg().updateUrl.empty() ? kDefaultUpdateUrl : Cfg().updateUrl;
         LOGI("Checking for updates from %s", url.c_str());
-        auto resp = nat::HttpRequest("GET", url, "", "", 7000);
+        std::string headers = "User-Agent: SA-COOP-Client\r\nAccept: application/vnd.github.v3+json\r\n";
+        auto resp = nat::HttpRequest("GET", url, "", headers, 7000);
         if (resp.status != 200 || resp.body.empty()) {
             LOGW("Update check failed (HTTP %d)", resp.status);
             SetStatus(State::Failed, TR("Не удалось проверить обновления.", "Failed to check for updates."));
