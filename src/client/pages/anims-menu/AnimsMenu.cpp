@@ -10,6 +10,8 @@
 
 #include "common/lib/util/Util.h"
 
+#include "entities/player/Players.h"
+
 #include "features/anims/Emotes.h"
 
 #include "shared/game/Anim.h"
@@ -463,7 +465,26 @@ void RenderAnimsMenu() {
 
     w::Checkbox("anim_looped", chkX, cy + (rowH - lh) * 0.5f, TR("Зацикленно", "Looped"), g_looped);
 
-    cy += rowH + 12 * s;
+    cy += rowH + 8 * s;
+
+    // Movement / Walk-Run-Idle Animation Set selector
+    float walkLabelW = g.TextWidth(FONT_SMALL, TR("Сет походки / бега:", "Walk / Run set:")) + 10 * s;
+    g.Text(FONT_SMALL, cx, cy + (rowH - sh) * 0.5f, TR("Сет походки / бега:", "Walk / Run set:"), kSaMuted, TEXT_SHADOW);
+    int curStyle = std::clamp(Cfg().animStyle, 0, Players::AnimStyleCount() - 1);
+    std::string styleLabel = Format("%d. %s", curStyle, Players::AnimStyleName(curStyle));
+    if (int d = w::Selector("walk_style", cx + walkLabelW, cy, cw - walkLabelW, rowH, styleLabel)) {
+        int count = Players::AnimStyleCount();
+        int next = (curStyle + d + count) % count;
+        Players::Instance().SetLocalAnimStyle(next);
+        auto* me = game::FindPlayerPed(0);
+        const char* pb = nullptr;
+        const char* pa = nullptr;
+        Players::GetAnimStylePreview(next, Cfg().skin, me ? me->ModelIndex() : 0, pb, pa);
+        PlayPreviewAnim(pb, pa, true);
+        Status(Format(TR("Сет анимаций походки/бега: %s", "Walk/run animation set: %s"), Players::AnimStyleName(next)));
+    }
+
+    cy += rowH + 10 * s;
 
     // List area & Side panel (Wheel slots)
 

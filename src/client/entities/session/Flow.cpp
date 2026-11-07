@@ -260,6 +260,7 @@ void SaveConnectSettings() {
     ini.Set("player", "name", cfg.nickname);
     ini.Set("player", "language", cfg.english ? "en" : "ru");
     ini.SetInt("player", "skin", cfg.skin);
+    ini.SetInt("player", "anim_style", cfg.animStyle);
     ini.Set("connect", "mode", cfg.wantsHost ? "host" : "join");  // the menu opens on the same tab next time
     ini.Set("connect", "host", cfg.host);
     ini.SetInt("connect", "port", cfg.port);

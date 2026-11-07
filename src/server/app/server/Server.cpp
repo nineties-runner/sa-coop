@@ -437,7 +437,7 @@ void Server::HandleCommand(Player* p, const std::string& text) {
         SendChat(nullptr, kServerId, kColorServer, "[Сервер] " + rest, "[Server] " + rest);
     } else if (cmd == "quit" && !p) {
         Stop();
-    } else if (cmd == "tp" || cmd == "tphere" || cmd == "voice" || cmd == "save" || cmd == "skin" || cmd == "update" || cmd == "checkupdate" || cmd == "fontsize" || cmd == "chatsize" || cmd == "e" ||
+    } else if (cmd == "tp" || cmd == "tphere" || cmd == "voice" || cmd == "save" || cmd == "skin" || cmd == "walk" || cmd == "animstyle" || cmd == "update" || cmd == "checkupdate" || cmd == "fontsize" || cmd == "chatsize" || cmd == "e" ||
                cmd == "emote" || cmd == "emotes") {
         // handled by the game client locally; nothing to do on the server
     } else {

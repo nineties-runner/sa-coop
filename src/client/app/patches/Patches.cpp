@@ -326,7 +326,7 @@ void __cdecl HookRequestMotionGroupAnims() {
     g_origMotionAnims();
     game::CPlayerPed* me = game::FindPlayerPed(0);
     int group = me ? game::Field<int32_t>(me, 0x4D4) : 0;  // CPed::m_nAnimGroup
-    const char* block = group == 55 ? "fat" : group == 56 ? "muscular" : nullptr;  // ANIM_GROUP_FAT, ANIM_GROUP_MUSCULAR
+    const char* block = group == 55 ? "fat" : group == 56 ? "muscular" : group == 138 ? "skate" : nullptr;
     if (int i = block ? game::Call<0x4D3990, int>(block) : -1; i >= 0)  // CAnimManager::GetAnimationBlockIndex
         game::RequestModel(game::anim::kIfpBase + i, 2 | 0x10);                 // GAME_REQUIRED, PRIORITY_REQUEST
 }
@@ -337,6 +337,9 @@ void __cdecl HookRequestMotionGroupAnims() {
 using ConstructPedModelFn = void(__cdecl*)(uint32_t, void*, const void*, bool);
 ConstructPedModelFn g_origConstructPedModel = nullptr;
 void __cdecl HookConstructPedModel(uint32_t model, void* clothes, const void* old, bool cutscene) {
+    // Only model 0 (or a cutscene's temporary slot) is a modular CJ clump: calling ConstructPedModel on a regular ped or
+    // special character skin (1..311) overwrites that skin's RpClump with an untextured, mangled CJ mesh!
+    if (!cutscene && model != 0) return;
     void* mi = model < 20000 ? game::Ref<void*>(game::addr::ModelInfoPtrs + model * 4) : nullptr;
     auto* txds = game::Ref<game::CPoolHeader*>(0xC8800C);  // CTxdStore::ms_pTxdPool
     int slot = mi ? game::Field<int16_t>(mi, 0x0A) : -1;   // m_nTxdIndex
@@ -365,6 +368,26 @@ void __cdecl HookConstructPedModel(uint32_t model, void* clothes, const void* ol
         if (cut) return g_origConstructPedModel(model, safe, old, cutscene);
     }
     g_origConstructPedModel(model, clothes, old, cutscene);
+}
+
+// CClothes::RebuildPlayer (called on hospital/arrest respawn, interior entry/exit via RebuildPlayerIfNeeded, and script
+// opcodes) deletes the player's RwObject and calls ConstructPedModel(ped->m_nModelIndex, ...). When the player wears a
+// non-CJ skin (model != 0), that destroys the skin's modelInfo clump and replaces it with a broken CJ mesh. Sync the
+// fat/muscle stats in CPedClothesDesc so RebuildPlayerIfNeeded is satisfied, and skip the CJ rebuild.
+using RebuildPlayerFn = void(__cdecl*)(game::CPlayerPed*, bool);
+RebuildPlayerFn g_origRebuildPlayer = nullptr;
+void __cdecl HookRebuildPlayer(game::CPlayerPed* ped, bool ignoreFatAndMuscle) {
+    if (ped && ped->ModelIndex() != 0) {
+        if (auto* desc = ped->ClothesDesc()) {
+            if (!ignoreFatAndMuscle) {
+                desc->fatStat = game::Call<0x558E40, float>((uint16_t)21);     // CStats::GetStatValue(STAT_FAT)
+                desc->muscleStat = game::Call<0x558E40, float>((uint16_t)23);  // CStats::GetStatValue(STAT_MUSCLE)
+            }
+            if (ped == game::FindPlayerPed(0)) memcpy((void*)0xBC1C78, desc, sizeof(game::CPedClothesDesc));
+        }
+        return;
+    }
+    g_origRebuildPlayer(ped, ignoreFatAndMuscle);
 }
 
 void InstallGrabScreenFix() {
@@ -859,6 +882,7 @@ void Apply() {
     InstallGrabScreenFix();
     mem::RedirectCallFn(0x5A8235, &HookRequestMotionGroupAnims, &g_origMotionAnims);  // CClothes::ConstructPedModel
     mem::HookFn(0x5A81E0, &HookConstructPedModel, &g_origConstructPedModel, "CClothes::ConstructPedModel");
+    mem::HookFn(0x5A82C0, &HookRebuildPlayer, &g_origRebuildPlayer, "CClothes::RebuildPlayer");
     if (cfg.windowed) {
         InstallWindowedMode();
         mem::HookFn(0x745C70, &HookSetVideoMode, &g_origSetVideoMode, "SetVideoMode");

@@ -295,6 +295,14 @@ void RenderConnectMenu() {
             g.Text(FONT_SMALL, cx + 330 * s, cy + (rowH - sh) * 0.5f, modelName, kSaMuted);
         }
         DrawSkinThumbnail(cx + cw - 52 * s, cy - 24 * s, 48 * s, 96 * s, Cfg().skin);
+        cy += rowH + 10 * s;
+        caption(cx, TR("Сет анимаций (походка / бег / стойка)", "Animation set (walk / run / idle)"));
+        cy += ch + 6 * s;
+        int curStyle = std::clamp(Cfg().animStyle, 0, Players::AnimStyleCount() - 1);
+        if (int d = w::Selector("walk_sel_on", cx, cy, 380 * s, rowH, Format("%d. %s", curStyle, Players::AnimStyleName(curStyle)))) {
+            int count = Players::AnimStyleCount();
+            Players::Instance().SetLocalAnimStyle((curStyle + d + count) % count);
+        }
         cy += rowH;
         if (!g_formError.empty()) {
             cy += 8 * s;
@@ -351,7 +359,15 @@ void RenderConnectMenu() {
         const char* applyLabel = TR("Применить", "Apply");
         if (skinEnter || item("skin_ok", sx + 190 * s + room, cy, applyLabel)) ApplySkin();
         DrawSkinThumbnail(cx + cw - 48 * s, cy - 8 * s, 44 * s, 88 * s, Cfg().skin);
-        cy += rowH + 14 * s;
+        cy += rowH + 10 * s;
+        caption(cx, TR("Сет анимаций (походка / бег / стойка)", "Animation set (walk / run / idle)"));
+        cy += ch + 6 * s;
+        int curStyle = std::clamp(Cfg().animStyle, 0, Players::AnimStyleCount() - 1);
+        if (int d = w::Selector("walk_sel", cx, cy, cw - 60 * s, rowH, Format("%d. %s", curStyle, Players::AnimStyleName(curStyle)))) {
+            int count = Players::AnimStyleCount();
+            Players::Instance().SetLocalAnimStyle((curStyle + d + count) % count);
+        }
+        cy += rowH + 12 * s;
 
         int hostSlot = 0;
         if (g_tab == 0) {

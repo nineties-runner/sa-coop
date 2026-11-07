@@ -838,8 +838,22 @@ float RemoteDistance(const CVector& p, int8_t area, uint8_t* who) {
 }
 
 // ------------------------------------------------------------------ module
+int __fastcall GetPlayerWalkGroup(CPlayerPed* ped, void* edx);
+
 void Players::OnInstallHooks() {
     mem::HookFn(0x60EA90, &HookPlayerProcessControl, &g_origProcessControl, "CPlayerPed::ProcessControl");
+    // In CPlayerPed::ProcessAnimGroups (0x6098F0), when not holding a 2-handed weapon (edi == 54 at 0x609A1F), the game
+    // checks `cmp dword ptr [esi+0x598], 1; jne 0x609A3B` and forces CClothes::GetDefaultPlayerMotionGroup (54/55/56).
+    // Call GetPlayerWalkGroup(ped) instead and jump to 0x609A44 (which updates m_nAnimGroup and calls ReApplyMoveAnims).
+    static const uint8_t kWalkGroupCheck[] = {0x83, 0xBE, 0x98, 0x05, 0x00, 0x00, 0x01, 0x75, 0x13};
+    if (mem::Check(0x609A1F, kWalkGroupCheck, sizeof kWalkGroupCheck)) {
+        uint8_t patch[9] = {0x89, 0xF1, 0xE8, 0, 0, 0, 0, 0xEB, 0x1C};  // mov ecx, esi; call GetPlayerWalkGroup; jmp 0x609A44
+        int32_t rel = (int32_t)((uintptr_t)&GetPlayerWalkGroup - (0x609A21 + 5));
+        memcpy(patch + 3, &rel, 4);
+        mem::Write(0x609A1F, patch, sizeof patch);
+    } else {
+        LOGW("Custom walk group hook skipped: unexpected bytes at 0x609A1F");
+    }
     mem::HookFn(0x624ED0, &HookUseGunPosition, &g_origUseGunPosition, "CTaskSimpleUseGun::SetPedPosition");
     void* coopGame = nullptr;  // CGameLogic::IsCoopGameGoingOn, always false (Patches)
     mem::RedirectCall(0x644A1A, (const void*)&PassengerDriveBy, &coopGame);
@@ -977,7 +991,159 @@ const char* MtaSpecialSkinName(int id) {
         default: return nullptr;
     }
 }
+
+struct AnimStyleDef {
+    int group;
+    const char* ru;
+    const char* en;
+    const char* block;
+    const char* previewAnim;
+};
+
+constexpr AnimStyleDef kAnimStyles[] = {
+    {0,   TR_BOTH("По умолчанию (CJ по весу/мышцам)", "Default (CJ by fat/muscle)"), "ped",      "run_player"},
+    {-1,  TR_BOTH("По скину персонажа",               "By character skin"),          "ped",      "run_civi"},
+    {54,  TR_BOTH("CJ (обычный)",                     "CJ (Normal)"),                "ped",      "run_player"},
+    {55,  TR_BOTH("CJ (толстый)",                     "CJ (Fat)"),                   "fat",      "FatRun"},
+    {56,  TR_BOTH("CJ (мускулистый)",                 "CJ (Muscular)"),              "muscular", "MuscleRun"},
+    {69,  TR_BOTH("Крадущийся (Sneak)",               "Sneak"),                      "ped",      "Player_Sneak"},
+    {118, TR_BOTH("Мужчина (обычный)",                "Male (Civilian)"),            "ped",      "run_civi"},
+    {119, TR_BOTH("Мужчина (шаркающий)",              "Male (Shuffle)"),             "ped",      "WALK_shuffle"},
+    {120, TR_BOTH("Старик",                           "Old Man"),                    "ped",      "run_old"},
+    {121, TR_BOTH("Гангстер 1",                       "Gangster 1"),                 "ped",      "run_gang1"},
+    {122, TR_BOTH("Гангстер 2",                       "Gangster 2"),                 "ped",      "walk_gang2"},
+    {123, TR_BOTH("Полный старик",                    "Old Fat Man"),                "ped",      "run_fatold"},
+    {124, TR_BOTH("Толстяк",                          "Fat Man"),                    "ped",      "run_fat"},
+    {125, TR_BOTH("Бегун (мужчина)",                  "Jogger (Male)"),              "ped",      "JOG_maleA"},
+    {126, TR_BOTH("Пьяный",                           "Drunk"),                      "ped",      "walk_drunk"},
+    {127, TR_BOTH("Слепой (Вузи)",                    "Blind (Woozie)"),             "ped",      "Walk_Wuzi"},
+    {128, TR_BOTH("Спецназ (SWAT / Коп)",             "SWAT / Cop"),                 "ped",      "swat_run"},
+    {129, TR_BOTH("Женщина (обычная)",                "Woman (Normal)"),             "ped",      "woman_run"},
+    {130, TR_BOTH("Женщина (шоппинг)",                "Woman (Shopping)"),           "ped",      "woman_walkshop"},
+    {131, TR_BOTH("Деловая женщина",                  "Busy Woman"),                 "ped",      "woman_runbusy"},
+    {132, TR_BOTH("Сексуальная походка",              "Sexy Woman"),                 "ped",      "woman_walksexy"},
+    {133, TR_BOTH("Путана",                           "Prostitute"),                 "ped",      "WOMAN_walkpro"},
+    {134, TR_BOTH("Старушка",                         "Old Woman"),                  "ped",      "woman_walkold"},
+    {135, TR_BOTH("Полная женщина",                   "Fat Woman"),                  "ped",      "walk_fat"},
+    {136, TR_BOTH("Бегунья (женщина)",                "Jogger (Female)"),            "ped",      "JOG_femaleA"},
+    {137, TR_BOTH("Полная старушка",                  "Old Fat Woman"),              "ped",      "woman_runfatold"},
+    {138, TR_BOTH("Ролики (Skate)",                   "Roller Skates"),              "skate",    "skate_run"},
+};
+constexpr int kAnimStyleCount = (int)(sizeof(kAnimStyles) / sizeof(kAnimStyles[0]));
+
+int SkinAnimGroup(int skinId, int modelIndex) {
+    switch (skinId) {
+        case 3: case 4: case 119: case 265: case 266: case 267: return 128;  // SWAT / Cop
+        case 5: case 269: case 311: return 124;                              // Fat Man (Big Bear, Big Smoke)
+        case 6: case 42: case 65: case 298: case 304: return 129;            // Woman (Catalina, Kendl, etc.)
+        case 86: return 132;                                                 // Sexy Woman
+        case 270: case 271: case 293: case 297: case 300: case 301: return 121;  // Gangster 1 (Sweet, Ryder, OG Loc, Madd Dogg)
+        case 292: case 307: return 122;                                      // Gangster 2 (Cesar, T-Bone)
+        case 294: return 127;                                                // Blind (Woozie)
+        default: break;
+    }
+    if (MtaSpecialSkinName(skinId)) return 118;  // Male (Civilian)
+    int m = (modelIndex > 0 && modelIndex < 290) ? modelIndex : skinId;
+    if (m > 0 && m < 290) {
+        if (void* mi = Ref<void*>(addr::ModelInfoPtrs + (uintptr_t)m * 4)) {
+            int grp = Field<int32_t>(mi, 0x24);  // CPedModelInfo::m_nAnimType
+            if (grp >= 54 && grp <= 138) return grp;
+        }
+    }
+    return 0;
+}
+
+bool EnsureWalkGroupLoaded(int group) {
+    if (group < 0 || group >= (int)Ref<uint32_t>(0xB4EA28)) return false;  // CAnimManager::ms_numAnimAssocDefinitions
+    uintptr_t g = Ref<uintptr_t>(0xB4EA34) + (uintptr_t)group * 0x14;    // ms_aAnimAssocGroups
+    uintptr_t block = Ref<uintptr_t>(g + 0x00);                           // CAnimBlendAssocGroup::m_pAnimBlock
+    if (!block) {
+        const char* blockName = group == 55 ? "fat" : group == 56 ? "muscular" : group == 138 ? "skate" : nullptr;
+        if (int idx = blockName ? Call<0x4D3990, int>(blockName) : -1; idx >= 0) {
+            if (!anim::BlockLoaded(idx)) {
+                RequestModel(anim::kIfpBase + idx, 2 | 0x10);
+                return false;
+            }
+            Call<0x4D3B30, void*>(group);  // CAnimManager::CreateAnimAssocGroups
+            block = Ref<uintptr_t>(g + 0x00);
+        }
+        if (!block) return false;
+    }
+    if (Ref<uint8_t>(block + 0x10) && Ref<void*>(g + 0x04)) return true;  // CAnimBlock::bLoaded && m_pAssociations
+    int idx = (int)((block - anim::kBlocks) / 0x20);
+    if (idx >= 0 && idx < 200) RequestModel(anim::kIfpBase + idx, 2 | 0x10);
+    return false;
+}
+
 }  // namespace
+
+int Players::AnimStyleCount() { return kAnimStyleCount; }
+
+const char* Players::AnimStyleName(int style) {
+    if (style < 0 || style >= kAnimStyleCount) style = 0;
+    return TR(kAnimStyles[style].ru, kAnimStyles[style].en);
+}
+
+int Players::ResolveAnimStyleGroup(int style, int skinId, int modelIndex, int defaultGroup) {
+    if (style < 0 || style >= kAnimStyleCount) style = 0;
+    if (style == 0) return defaultGroup;
+    if (style == 1) {
+        if (skinId == 0 && modelIndex == 0) return defaultGroup;
+        int g = SkinAnimGroup(skinId, modelIndex);
+        return g > 0 ? g : defaultGroup;
+    }
+    return kAnimStyles[style].group;
+}
+
+void Players::GetAnimStylePreview(int style, int skinId, int modelIndex, const char*& block, const char*& anim) {
+    if (style < 0 || style >= kAnimStyleCount) style = 0;
+    int idx = style;
+    if (style == 1) {
+        int g = SkinAnimGroup(skinId, modelIndex);
+        idx = 0;
+        for (int i = 2; i < kAnimStyleCount; ++i)
+            if (kAnimStyles[i].group == g) {
+                idx = i;
+                break;
+            }
+    }
+    block = kAnimStyles[idx].block;
+    anim = kAnimStyles[idx].previewAnim;
+}
+
+bool Players::SetLocalAnimStyle(int style) {
+    if (style < 0 || style >= kAnimStyleCount) return false;
+    Cfg().animStyle = style;
+    Ini ini;
+    ini.Load(Cfg().iniPath);
+    ini.SetInt("player", "anim_style", style);
+    ini.Save(Cfg().iniPath);
+    if (core::IsPlayerReady()) {
+        if (CPlayerPed* me = FindPlayerPed(0)) {
+            int def = Call<0x5A81B0, int>();  // CClothes::GetDefaultPlayerMotionGroup
+            int g = ResolveAnimStyleGroup(style, Cfg().skin, me->ModelIndex(), def);
+            if (EnsureWalkGroupLoaded(g) && Field<int32_t>(me, 0x4D4) != g) {
+                Field<int32_t>(me, 0x4D4) = g;
+                CallMethod<0x609650>(me);  // CPlayerPed::ReApplyMoveAnims
+            }
+        }
+    }
+    return true;
+}
+
+int __fastcall GetPlayerWalkGroup(CPlayerPed* ped, void*) {
+    int def = Call<0x5A81B0, int>();  // CClothes::GetDefaultPlayerMotionGroup (uses active CStats context)
+    int style = Cfg().animStyle;
+    int skinId = Cfg().skin;
+    int model = ped ? ped->ModelIndex() : 0;
+    if (RemotePlayer* rp = Players::Instance().FindByPed(ped)) {
+        style = rp->animStyle;
+        skinId = rp->skinId;
+    }
+    int want = Players::ResolveAnimStyleGroup(style, skinId, model, def);
+    if (want != def && EnsureWalkGroupLoaded(want)) return want;
+    return def;
+}
 
 bool Players::ValidSkinId(int id) {
     if (id < 0 || id > 311 || id == 74 || id == 149 || id == 208) return false;
@@ -1941,7 +2107,9 @@ void Players::KeepWalkSet(RemotePlayer& rp) {
     rp.walkSetMs = NowMs();
     constexpr size_t kFloats = 0xB79380 - kStatsBlock;  // CStats::StatTypesFloat
     float fat = *(const float*)&rp.stats[kFloats + 21 * 4], muscle = *(const float*)&rp.stats[kFloats + 23 * 4];  // STAT_FAT, STAT_MUSCLE
-    const char* block = fat > 500.0f && fat > muscle ? "fat" : muscle > 500.0f ? "muscular" : nullptr;
+    int def = fat > 500.0f && fat > muscle ? 55 : muscle > 500.0f ? 56 : 54;
+    int grp = ResolveAnimStyleGroup(rp.animStyle, rp.skinId, rp.ped ? rp.ped->ModelIndex() : 0, def);
+    const char* block = grp == 55 ? "fat" : grp == 56 ? "muscular" : grp == 138 ? "skate" : nullptr;
     if (int i = block ? Call<0x4D3990, int>(block) : -1; i >= 0) RequestModel(anim::kIfpBase + i, 2);  // CAnimManager::GetAnimationBlockIndex
 }
 
@@ -2290,6 +2458,29 @@ bool Players::OnCommand(const std::string& cmd, const std::vector<std::string>& 
         } else {
             ui::TheChat().AddSystem(id == 0 ? TR("Установлен скин CJ (ID 0).", "Skin set to CJ (ID 0).")
                                             : Format(TR("Установлен скин ID %d.", "Skin set to ID %d."), id));
+        }
+        return true;
+    }
+    if (cmd == "walk" || cmd == "animstyle") {
+        if (args.empty()) {
+            ui::TheChat().AddSystem(Format(TR("Сет анимаций: %d (%s). Сменить: /walk <0–%d> или в окнах F3 / F9.",
+                                              "Animation set: %d (%s). Change with /walk <0–%d> or in F3 / F9."),
+                                           Cfg().animStyle, AnimStyleName(Cfg().animStyle), AnimStyleCount() - 1));
+            return true;
+        }
+        std::string arg = Trim(args[0]);
+        if (arg.find_first_not_of("0123456789") != std::string::npos) {
+            ui::TheChat().AddError(Format(TR("Укажите номер сета анимаций от 0 до %d.", "Enter an animation set number from 0 to %d."),
+                                          AnimStyleCount() - 1));
+            return true;
+        }
+        int st = atoi(arg.c_str());
+        if (!SetLocalAnimStyle(st)) {
+            ui::TheChat().AddError(Format(TR("Укажите номер сета анимаций от 0 до %d.", "Enter an animation set number from 0 to %d."),
+                                          AnimStyleCount() - 1));
+        } else {
+            ui::TheChat().AddSystem(Format(TR("Установлен сет анимаций: %s (#%d).", "Animation set changed to: %s (#%d)."),
+                                           AnimStyleName(st), st));
         }
         return true;
     }

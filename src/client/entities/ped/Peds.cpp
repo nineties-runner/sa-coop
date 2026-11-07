@@ -130,6 +130,7 @@ void MakeWay(int model, const char* name) {
     if (CPlayerPed* me = FindPlayerPed(0); me && me->ModelIndex() == model) {
         Players::SetModel(me, 0);
         Call<0x5A82C0>(me, false);  // CClothes::RebuildPlayer
+        Players::Instance().InvalidateLocalSkin();
         LOGI("Our special character makes way for %s", name);
     }
     for (auto& [id, other] : Players::Instance().All())
@@ -404,6 +405,21 @@ int Peds::SpecialModelFor(const std::string& name) {
             LOGI("Special character %s asked for in slot %d", name.c_str(), m);
             return -1;
         }
+    // When all 10 special slots have been used once, CStreaming::SetModelIsDeletable only clears flags 0x02/0x04 and
+    // leaves m_nLoadState == 1 in RAM until memory pressure evicts it. Reuse any loaded slot that has 0 references and
+    // is not held by a script or game requirement (flags 0x06).
+    for (int m = kSpecialLast; m >= kSpecialFirst; --m) {
+        void* mi = Ref<void*>(addr::ModelInfoPtrs + (uintptr_t)m * 4);
+        uint16_t refs = mi ? Field<uint16_t>(mi, 0x08) : 1;                   // CBaseModelInfo::m_nRefCount
+        uint8_t sflags = Ref<uint8_t>(0x8E4CC0 + (uintptr_t)m * 0x14 + 0x06);  // CStreamingInfo::m_nFlags
+        if (LoadState(m) == 1 && refs == 0 && !(sflags & 0x06)) {
+            g_origRequestSpecial(m, name.c_str(), 2);
+            m_specialNames[m] = name;
+            m_ourSpecials.insert(m);
+            LOGI("Special character %s asked for in reusable slot %d", name.c_str(), m);
+            return -1;
+        }
+    }
     return -1;
 }
 

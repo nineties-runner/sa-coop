@@ -59,6 +59,8 @@ struct RemotePlayer {
     int8_t doorFromArea = 0;  // the area it was in then
     bool goneInDoor = false;    // it turned from the door on its way in: out of sight until it is inside
     uint64_t walkSetMs = 0;     // its body's walk set last asked for (KeepWalkSet)
+    uint8_t animStyle = 0;      // movement animation set chosen by its owner (G_PLAYER_LOOK)
+    uint16_t skinId = 0;        // skin ID chosen by its owner (G_PLAYER_LOOK)
     // a person of a script here whose place and animation it takes instead of its owner's (the bar's opponent at a pool
     // table when its owner plays there as the second player, Pool.cpp), by handle; -1: none
     int avatar = -1;
@@ -87,6 +89,12 @@ public:
     static bool ValidSkinId(int id);
     static int StepSkinId(int id, int dir);
     bool SetLocalSkin(int id, std::string* errorOut = nullptr);
+    void InvalidateLocalSkin() { m_appliedSkinId = -1; m_appliedSkinModel = -1; }
+    static int AnimStyleCount();
+    static const char* AnimStyleName(int style);
+    static void GetAnimStylePreview(int style, int skinId, int modelIndex, const char*& block, const char*& anim);
+    static int ResolveAnimStyleGroup(int style, int skinId, int modelIndex, int defaultGroup);
+    bool SetLocalAnimStyle(int style);
     const std::map<uint8_t, RemotePlayer>& All() const { return m_remote; }
     // our own mark in this colour on the other players' radar (BlipColour's names, empty: the allies' blue), saved in
     // coop.ini and sent to them

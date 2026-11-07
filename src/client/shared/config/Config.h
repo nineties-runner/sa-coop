@@ -9,6 +9,7 @@ struct ClientConfig {
     std::string nickname = "Player";
     bool english = false;             // language = en: the interface in English instead of Russian
     int skin = 0;                     // character model ID (0 = CJ in his clothes)
+    int animStyle = 0;                // walk/run/idle animation set (0 = default CJ, 1 = by skin, 2..26 = custom)
 
     // [connect]
     bool autoConnect = false;  // the F9 menu by default; launchers and test setups switch it on

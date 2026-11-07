@@ -650,6 +650,8 @@ struct RemoteLook {
     uint16_t model = 0;    // a skin mod's player model (SET_PLAYER_MODEL), 0 = CJ in his clothes
     std::string special;   // a special character's (models 290-299 are filled by name, each game its own)
     uint8_t style = 0, moves = 0;  // the gym's fighting style (CPed +0x72D, +0x72E): the copy fights as its owner does
+    uint8_t animStyle = 0;         // movement animation set chosen by its owner
+    uint16_t skinId = 0;           // skin ID chosen by its owner
     int appliedTo = -1;    // handle of the ped it was last rebuilt on: a respawned ped can reuse the old one's address
     uint64_t waitMs = 0;   // a special character asked for here since
 };
@@ -663,10 +665,18 @@ void HandleLook(uint8_t from, Reader& r) {
     std::string special = r.Str(16);
     uint8_t style = r.U8(), moves = r.U8();
     if (!r.Ok() || desc.size() != kClothesSize || from == Net().MyId()) return;
+    uint8_t animStyle = r.Remaining() >= 1 ? r.U8() : 0;
+    uint16_t skinId = r.Remaining() >= 2 ? r.U16() : model;
     RemoteLook& l = g_looks[from];
     if (l.style != style) LOGI("Player %d fights in style %d (moves %d)", from, style, moves);
     l.style = style;
     l.moves = moves;
+    l.animStyle = animStyle;
+    l.skinId = skinId;
+    if (RemotePlayer* rp = Players::Instance().Get(from)) {
+        rp->animStyle = animStyle;
+        rp->skinId = skinId;
+    }
     if (l.desc != desc || l.model != model || l.special != special) l.appliedTo = -1, l.waitMs = 0;
     l.desc = std::move(desc);
     l.model = model;
@@ -806,7 +816,10 @@ public:
             std::vector<uint8_t> desc((uint8_t*)me->ClothesDesc(), (uint8_t*)me->ClothesDesc() + kClothesSize);
             uint16_t model = me->ModelIndex();
             uint16_t fight = me->FightingStyle() | Field<uint8_t>(me, 0x72E) << 8;
-            bool changed = desc != m_sentLook || model != m_sentModel || fight != m_sentFight;
+            uint8_t animStyle = (uint8_t)std::clamp(Cfg().animStyle, 0, 255);
+            uint16_t skinId = (uint16_t)std::clamp(Cfg().skin, 0, 65535);
+            bool changed = desc != m_sentLook || model != m_sentModel || fight != m_sentFight ||
+                           animStyle != m_sentAnimStyle || skinId != m_sentSkinId;
             if (changed && !m_sentLook.empty()) m_lookChangedMs = now;
             if ((changed && now - m_lookSentMs >= 200) || now - m_lookSentMs > 10000) {
                 Writer w(proto::G_PLAYER_LOOK);
@@ -815,10 +828,14 @@ public:
                 w.Str(model >= 290 && model <= 299 ? Peds::Instance().SpecialName(model) : std::string(), 16);
                 w.U8((uint8_t)fight);
                 w.U8((uint8_t)(fight >> 8));
+                w.U8(animStyle);
+                w.U16(skinId);
                 Net().Send(proto::CH_RELIABLE, w);
                 m_sentLook = std::move(desc);
                 m_sentModel = model;
                 m_sentFight = fight;
+                m_sentAnimStyle = animStyle;
+                m_sentSkinId = skinId;
                 m_lookSentMs = now;
             }
         }
@@ -839,6 +856,10 @@ public:
         // remote looks: rebuild the remote ped once per new description (on foot: the rebuild swaps its clump)
         for (auto& [id, l] : g_looks) {
             RemotePlayer* rp = Players::Instance().Get(id);
+            if (rp) {
+                rp->animStyle = l.animStyle;
+                rp->skinId = l.skinId;
+            }
             if (rp && rp->ped && l.style) rp->ped->FightingStyle() = l.style, Field<uint8_t>(rp->ped, 0x72E) = l.moves;
             if (!rp || !rp->ped || (rp->pedHandle == l.appliedTo && !rp->lookStale) || rp->ped->InVehicle()) continue;
             int model = l.model;
@@ -892,6 +913,8 @@ private:
     std::vector<uint8_t> m_profile, m_saved, m_sentLook, m_sentStats;
     uint16_t m_sentModel = 0;
     uint16_t m_sentFight = 0;
+    uint8_t m_sentAnimStyle = 0;
+    uint16_t m_sentSkinId = 0;
     bool m_profileReceived = false, m_applied = false;
     bool m_resetPending = false, m_reset = false;  // a new game emptied the profile: applied in the next world
     uint64_t m_lastSaveMs = 0, m_lastLookMs = 0, m_lookSentMs = 0, m_statsSentMs = 0, m_quietUntil = 0;
